@@ -4,19 +4,22 @@
 
 using System.Text;
 using System.Text.Json;
-using Npgsql;
+using LlmOps.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpClient();
-var app = builder.Build();
 
 // налаштування беремо з оточення (задаються в docker-compose.yml)
 var gateway = Environment.GetEnvironmentVariable("GATEWAY_URL") ?? "http://gateway:4000";
 var dbConn = Environment.GetEnvironmentVariable("DB_CONN")
     ?? "Host=postgres;Database=llmops;Username=llmops;Password=llmops";
 var defaultModel = Environment.GetEnvironmentVariable("MODEL") ?? "mock";
+builder.Services.AddSingleton(new PromptRepository(dbConn));
+builder.Services.AddSingleton(new RequestRepository(dbConn));
+var app = builder.Build();
 
-app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory) =>
+app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory,
+    PromptRepository prompts, RequestRepository requests) =>
 {
     var requestId = Guid.NewGuid();
     var startedAt = DateTimeOffset.UtcNow;
@@ -27,8 +30,9 @@ app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory) =>
     // routing (W2): поки одна модель, а треба обирати за задачею
     var model = defaultModel;  // TODO(student, W2)
 
-    // промпт (W1): захардкодив — має братися з реєстру (таблиця prompts) з версією
-    var systemPrompt = "You are a support assistant.";  // TODO(student, W1)
+    // Беремо активний промпт і його версію з реєстру.
+    var prompt = await prompts.GetActivePrompt();
+    var systemPrompt = prompt.Body;
 
     // cache (W3): перед викликом глянути в Redis — раптом вже відповідали
     // TODO(student, W3)
@@ -48,6 +52,7 @@ app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory) =>
     var http = httpFactory.CreateClient();
     var answer = "";
     string? toolCall = null;
+    string? finishReason = null;
     int promptTokens = 0, completionTokens = 0, status = 0; // 0 = відповіді не було
     try
     {
@@ -58,7 +63,11 @@ app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory) =>
         var rawJson = await response.Content.ReadAsStringAsync();
 
         using var doc = JsonDocument.Parse(rawJson);
-        var message = doc.RootElement.GetProperty("choices")[0].GetProperty("message");
+        var choice = doc.RootElement.GetProperty("choices")[0];
+        var message = choice.GetProperty("message");
+        if (choice.TryGetProperty("finish_reason", out var reason)
+            && reason.ValueKind == JsonValueKind.String)
+            finishReason = reason.GetString();
         answer = message.GetProperty("content").GetString() ?? "";
 
         // tools + HITL (W3/W4): якщо модель попросила інструмент — виконати;
@@ -87,7 +96,7 @@ app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory) =>
     decimal? costUsd = null;  // TODO(student, W2)
 
     // лог кожного запиту — з цього живе observability (W1) і cost (W2)
-    await LogRequest(dbConn, requestId, model, latencyMs, promptTokens, completionTokens, costUsd, status);
+    await requests.LogRequest(requestId, model, prompt.Version, latencyMs, promptTokens, completionTokens, costUsd, status, finishReason);
 
     return Results.Json(new { request_id = requestId, content = answer, tool = toolCall, latency_ms = latencyMs });
 });
@@ -96,33 +105,26 @@ app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory) =>
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));                                    // ліфнес, не для консолі
 app.MapGet("/observability", () => Results.Json(new { todo = "aggregate from requests table" }));  // W5: { p95_ms, requests, cache_hit_pct, error_rate_pct, fallback_events }
 app.MapGet("/cost", () => Results.Json(new { todo = "sum cost_usd for today + budget" }));         // W2/W5: { today_usd, budget_usd }
-app.MapGet("/prompts", () => Results.Json(new { todo = "list from prompts table" }));              // W1/W2: [ { name, version, active } ]
+// W1: [ { name, version, active } ]
+app.MapGet("/prompts", async (PromptRepository prompts) =>
+    Results.Json(await prompts.ListPrompts()));
+app.MapGet("/prompts/activations", async (PromptRepository prompts) =>
+    Results.Json(await prompts.ListActivations()));
+app.MapPost("/prompts/{version}/activate", async (string version, HttpContext context,
+    PromptRepository prompts) =>
+{
+    var actor = context.Request.Headers["X-Actor"].ToString().Trim();
+    if (string.IsNullOrWhiteSpace(actor))
+        actor = "unknown";
+
+    if (!await prompts.ActivatePrompt(version, actor))
+        return (IResult)Results.NotFound();
+
+    return Results.Ok(new { version, active = true });
+});
 app.MapGet("/providers", () => Results.Json(new { todo = "provider health" }));                    // W5: { providers: [ { name, status } ] }
 app.MapGet("/approvals", () => Results.Json(new { todo = "pending HITL approvals" }));              // W4: { pending: [ { id, action } ] }
 
 app.Run("http://0.0.0.0:8080");
-
-// пише один рядок у requests. якщо лог впав — запит користувача все одно віддаємо.
-static async Task LogRequest(string conn, Guid id, string model, int latency,
-    int promptTokens, int completionTokens, decimal? cost, int status)
-{
-    try
-    {
-        await using var db = new NpgsqlConnection(conn);
-        await db.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            "INSERT INTO requests (request_id, model, latency_ms, prompt_tokens, completion_tokens, cost_usd, status) "
-            + "VALUES (@id, @model, @lat, @pt, @ct, @cost, @status)", db);
-        cmd.Parameters.AddWithValue("id", id);
-        cmd.Parameters.AddWithValue("model", model);
-        cmd.Parameters.AddWithValue("lat", latency);
-        cmd.Parameters.AddWithValue("pt", promptTokens);
-        cmd.Parameters.AddWithValue("ct", completionTokens);
-        cmd.Parameters.AddWithValue("cost", (object?)cost ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("status", status.ToString());
-        await cmd.ExecuteNonQueryAsync();
-    }
-    catch { /* не валимо запит через лог */ }
-}
 
 record ChatIn(string Message);

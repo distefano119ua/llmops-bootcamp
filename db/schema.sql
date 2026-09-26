@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS requests (
     prompt_tokens   INTEGER,
     completion_tokens INTEGER,
     cost_usd        NUMERIC(10, 6),
-    status          TEXT
+    status          TEXT,
+    finish_reason   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS prompts (
@@ -21,6 +22,22 @@ CREATE TABLE IF NOT EXISTS prompts (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (name, version)
 );
+
+INSERT INTO prompts (name, version, body, active) VALUES
+  ('support', 'v1', 'You are an assistant.', false),
+  ('support', 'v2', 'You are a support assistant. Be concise and helpful.', true);
+
+CREATE TABLE IF NOT EXISTS prompt_activations (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    prompt_name   TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    actor         TEXT NOT NULL,
+    activated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (prompt_name, version) REFERENCES prompts (name, version)
+);
+
+INSERT INTO prompt_activations (prompt_name, version, actor)
+VALUES ('support', 'v2', 'system-seed');
 
 CREATE INDEX IF NOT EXISTS idx_requests_created_at ON requests (created_at);
 CREATE INDEX IF NOT EXISTS idx_requests_model ON requests (model);
