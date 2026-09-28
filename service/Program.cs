@@ -5,8 +5,10 @@
 using System.Text;
 using System.Text.Json;
 using LlmOps.Infrastructure;
+using LlmOps.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddInfrastructureLogging(args);
 builder.Services.AddHttpClient();
 
 // налаштування беремо з оточення (задаються в docker-compose.yml)
@@ -14,14 +16,22 @@ var gateway = Environment.GetEnvironmentVariable("GATEWAY_URL") ?? "http://gatew
 var dbConn = Environment.GetEnvironmentVariable("DB_CONN")
     ?? "Host=postgres;Database=llmops;Username=llmops;Password=llmops";
 var defaultModel = Environment.GetEnvironmentVariable("MODEL") ?? "mock";
-builder.Services.AddSingleton(new PromptRepository(dbConn));
-builder.Services.AddSingleton(new RequestRepository(dbConn));
+builder.Services.AddSingleton<PromptRepository>(services =>
+    new PromptRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>(),
+        services.GetRequiredService<ILogger<PromptRepository>>()));
+builder.Services.AddSingleton<RequestRepository>(services =>
+    new RequestRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>()));
+builder.Services.AddHostedService<PostgresHealthMonitor>(services =>
+    new PostgresHealthMonitor(dbConn, services.GetRequiredService<ILogger<PostgresHealthMonitor>>(),
+        services.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<InfrastructureLoggingOptions>>(),
+        services.GetRequiredService<PromptRepository>(), services.GetRequiredService<PostgresAvailability>()));
 var app = builder.Build();
+app.UseMiddleware<LoggingMiddleware>();
 
 app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory,
-    PromptRepository prompts, RequestRepository requests) =>
+    PromptRepository prompts, RequestRepository requests, HttpContext context) =>
 {
-    var requestId = Guid.NewGuid();
+    var requestId = Guid.Parse(context.TraceIdentifier);
     var startedAt = DateTimeOffset.UtcNow;
 
     // guardrails (W4): тут перевірити вхід на PII / інʼєкції. поки нічого.
@@ -103,8 +113,10 @@ app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory,
 
 // ці ендпоінти читає готова консоль. поверни потрібну форму — картки оживуть.
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));                                    // ліфнес, не для консолі
+
 app.MapGet("/observability", () => Results.Json(new { todo = "aggregate from requests table" }));  // W5: { p95_ms, requests, cache_hit_pct, error_rate_pct, fallback_events }
 app.MapGet("/cost", () => Results.Json(new { todo = "sum cost_usd for today + budget" }));         // W2/W5: { today_usd, budget_usd }
+
 // W1: [ { name, version, active } ]
 app.MapGet("/prompts", async (PromptRepository prompts) =>
     Results.Json(await prompts.ListPrompts()));

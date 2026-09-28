@@ -1,19 +1,29 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "2"
+
 services:
   ui:
     build: ./ui
+    logging: *default-logging
     ports: ["4200:4200"]
     depends_on: [service]
 
   service:
     build: ./service
+    logging: *default-logging
     ports: ["8080:8080"]
     environment:
+      - ASPNETCORE_ENVIRONMENT=Development
       - GATEWAY_URL=http://gateway:4000
       - DB_CONN=Host=postgres;Database=llmops;Username=llmops;Password=llmops
       - MODEL=${MODEL:-mock}   # mock (за замовч.) або gpt-5-mini / claude-haiku (потрібен ключ у gateway/.env)
     depends_on: [gateway, postgres]
 
   gateway:
+    logging: *default-logging
     # nightly-тег рухомий — пінимо перевірений digest, щоб у всіх студентів був той самий gateway
     image: ghcr.io/berriai/litellm:main-latest@sha256:80ea654c506da9083503d00c1b323b2fecddf17af6add9bf01b2603938e17bd2
     command: ["--config", "/app/config.yaml", "--port", "4000"]
@@ -30,10 +40,12 @@ services:
 
   mock-provider:
     build: ./mock-provider
+    logging: *default-logging
     expose: ["9000"]
 
   postgres:
     image: postgres:16
+    logging: *default-logging
     environment:
       - POSTGRES_USER=llmops
       - POSTGRES_PASSWORD=llmops
@@ -46,6 +58,7 @@ services:
   # --- optional (advanced): docker compose --profile advanced up ---
   redis:
     image: redis:7
+    logging: *default-logging
     profiles: ["advanced"]
     ports: ["6379:6379"]
 

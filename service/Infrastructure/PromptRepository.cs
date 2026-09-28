@@ -1,4 +1,5 @@
 using Npgsql;
+using LlmOps.Middleware;
 
 namespace LlmOps.Infrastructure;
 
@@ -7,9 +8,39 @@ public sealed record PromptInfo(string Name, string Version, bool Active);
 public sealed record PromptActivation(long Id, string PromptName, string Version,
     string Actor, DateTime ActivatedAt);
 
-public sealed class PromptRepository(string connectionString)
+public sealed class PromptRepository(string connectionString, PostgresOperationLogger operations,
+    ILogger<PromptRepository> logger)
 {
-    public async Task<bool> ActivatePrompt(string version, string actor)
+    private readonly object registryStateLock = new();
+    private bool? hasActivePrompt;
+
+    private void ObserveRegistry(bool active, bool forceLog = false)
+    {
+        lock (registryStateLock)
+        {
+            if (hasActivePrompt == active && !forceLog) return;
+            if (!active)
+                logger.LogWarning(new EventId(1200, "registry.no_active_prompt"), "No active prompt");
+            else if (hasActivePrompt == false)
+                logger.LogInformation(new EventId(1201, "registry.active_prompt.restored"), "Active prompt restored");
+            else
+                logger.LogInformation(new EventId(1202, "registry.active_prompt.available"), "Active prompt available");
+            hasActivePrompt = active;
+        }
+    }
+
+    // Reuse the monitor's bounded connection. Read only registry state, not prompt content.
+    public async Task CheckRegistryAsync(NpgsqlConnection db, CancellationToken cancellationToken,
+        bool forceLog = false)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT EXISTS (SELECT 1 FROM prompts WHERE name = @name AND active = true)", db);
+        command.Parameters.AddWithValue("name", "support");
+        var active = (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
+        ObserveRegistry(active, forceLog);
+    }
+
+    public Task<bool> ActivatePrompt(string version, string actor) => operations.Run("update", async () =>
     {
         await using var db = new NpgsqlConnection(connectionString);
         await db.OpenAsync();
@@ -29,9 +60,9 @@ public sealed class PromptRepository(string connectionString)
         // Зміна активної версії й запис історії — одна атомарна SQL-команда.
         // Невідома версія не змінить реєстр і не створить запис історії.
         return await cmd.ExecuteScalarAsync() is not null;
-    }
+    });
 
-    public async Task<IReadOnlyList<PromptActivation>> ListActivations()
+    public Task<IReadOnlyList<PromptActivation>> ListActivations() => operations.Run<IReadOnlyList<PromptActivation>>("select", async () =>
     {
         var activations = new List<PromptActivation>();
         await using var db = new NpgsqlConnection(connectionString);
@@ -45,9 +76,9 @@ public sealed class PromptRepository(string connectionString)
                 reader.GetString(2), reader.GetString(3), reader.GetDateTime(4)));
 
         return activations;
-    }
+    });
 
-    public async Task<IReadOnlyList<PromptInfo>> ListPrompts()
+    public Task<IReadOnlyList<PromptInfo>> ListPrompts() => operations.Run<IReadOnlyList<PromptInfo>>("select", async () =>
     {
         var prompts = new List<PromptInfo>();
         await using var db = new NpgsqlConnection(connectionString);
@@ -58,8 +89,9 @@ public sealed class PromptRepository(string connectionString)
         while (await reader.ReadAsync())
             prompts.Add(new PromptInfo(reader.GetString(0), reader.GetString(1), reader.GetBoolean(2)));
 
+        ObserveRegistry(prompts.Any(prompt => prompt.Name == "support" && prompt.Active));
         return prompts;
-    }
+    });
 
     // Без активного промпта використовуємо видимий дефолт без "support".
     public async Task<ActivePrompt> GetActivePrompt()
@@ -67,18 +99,26 @@ public sealed class PromptRepository(string connectionString)
         var fallback = new ActivePrompt("You are an assistant.", "none");
         try
         {
-            await using var db = new NpgsqlConnection(connectionString);
-            await db.OpenAsync();
-            await using var cmd = new NpgsqlCommand(
-                "SELECT body, version FROM prompts WHERE name = @name AND active = true LIMIT 1", db);
-            cmd.Parameters.AddWithValue("name", "support");
-            await using var reader = await cmd.ExecuteReaderAsync();
-            if (await reader.ReadAsync())
-                return new ActivePrompt(reader.GetString(0), reader.GetString(1));
+            return await operations.Run("select", async () =>
+            {
+                await using var db = new NpgsqlConnection(connectionString);
+                await db.OpenAsync();
+                await using var cmd = new NpgsqlCommand(
+                    "SELECT body, version FROM prompts WHERE name = @name AND active = true LIMIT 1", db);
+                cmd.Parameters.AddWithValue("name", "support");
+                await using var reader = await cmd.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    ObserveRegistry(true);
+                    return new ActivePrompt(reader.GetString(0), reader.GetString(1));
+                }
+                ObserveRegistry(false);
+                return fallback;
+            });
         }
-        catch (NpgsqlException ex)
+        catch (NpgsqlException)
         {
-            Console.Error.WriteLine($"Cannot load active prompt: {ex.Message}");
+            // Infrastructure failure is recorded by PostgresOperationLogger.
         }
 
         return fallback;

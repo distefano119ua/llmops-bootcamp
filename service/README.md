@@ -13,3 +13,10 @@
 LiteLLM викликається лише для самого запиту до обраної моделі.
 
 Skeleton готовий: `Program.cs` (`/chat` + API-контракт `/observability` `/cost` `/prompts` `/health` `/approvals`), `Service.csproj`, `Dockerfile`. Місця для дороблення позначені `TODO(student)`.
+
+## Системні JSON-логи
+
+HTTP middleware і логування операцій PostgreSQL розташовані в [`middleware/`](middleware/README.md).
+Налаштування рівнів, полів і виключених HTTP-шляхів — у
+[`middleware/logging_config.json`](middleware/logging_config.json).
+Одна подія — один плоский JSON-рядок у stdout; HTTP і БД пов'язані через `request_id`.
