@@ -93,34 +93,22 @@ public sealed class PromptRepository(string connectionString, PostgresOperationL
         return prompts;
     });
 
-    // Без активного промпта використовуємо видимий дефолт без "support".
-    public async Task<ActivePrompt> GetActivePrompt()
+    // "none" означає успішне читання реєстру без активного промпта.
+    // Помилка БД проходить через operations.Run до HTTP middleware як 503.
+    public Task<ActivePrompt> GetActivePrompt() => operations.Run("select", async () =>
     {
-        var fallback = new ActivePrompt("You are an assistant.", "none");
-        try
+        await using var db = new NpgsqlConnection(connectionString);
+        await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT body, version FROM prompts WHERE name = @name AND active = true LIMIT 1", db);
+        cmd.Parameters.AddWithValue("name", "support");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (await reader.ReadAsync())
         {
-            return await operations.Run("select", async () =>
-            {
-                await using var db = new NpgsqlConnection(connectionString);
-                await db.OpenAsync();
-                await using var cmd = new NpgsqlCommand(
-                    "SELECT body, version FROM prompts WHERE name = @name AND active = true LIMIT 1", db);
-                cmd.Parameters.AddWithValue("name", "support");
-                await using var reader = await cmd.ExecuteReaderAsync();
-                if (await reader.ReadAsync())
-                {
-                    ObserveRegistry(true);
-                    return new ActivePrompt(reader.GetString(0), reader.GetString(1));
-                }
-                ObserveRegistry(false);
-                return fallback;
-            });
+            ObserveRegistry(true);
+            return new ActivePrompt(reader.GetString(0), reader.GetString(1));
         }
-        catch (NpgsqlException)
-        {
-            // Infrastructure failure is recorded by PostgresOperationLogger.
-        }
-
-        return fallback;
-    }
+        ObserveRegistry(false);
+        return new ActivePrompt("You are an assistant.", "none");
+    });
 }
