@@ -31,8 +31,5 @@ Thumbs.db
 # спільні налаштування проєкту лишаємо: вони стосуються всіх, хто відкриє
 # стартер, а не чиїхось особистих звичок
 !.vscode/settings.json
-db/migrations
-docs/
-homework/
 GETTING_STARTED.md
 PREREQUISITES.md

@@ -1,0 +1,23 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.Hosting.Lifetime": "Information",
+      "System.Net.Http.HttpClient": "None"
+    }
+  },
+  "InfrastructureLogging": {
+    "ServiceName": "llmops-service",
+    "TimestampFormat": "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+    "IncludeCategory": true,
+    "IncludeExceptionStackTrace": false,
+    "DatabaseHealthIntervalSeconds": 5,
+    "DatabaseHealthTimeoutSeconds": 3,
+    "ExcludedPaths": ["/health", "/observability", "/cost", "/prompts", "/providers", "/approvals"],
+    "StateFields": ["dependency", "operation", "duration_ms", "address", "connection_id", "request_id"],
+    "FrameworkMessages": {
+      "Microsoft.AspNetCore.Server.Kestrel:13": "Unhandled application exception"
+    }
+  }
+}
