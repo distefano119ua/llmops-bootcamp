@@ -7,6 +7,8 @@ using System.Text.Json;
 using LlmOps.Infrastructure;
 using LlmOps.Middleware;
 using LlmOps.Routing;
+using LlmOps.Endpoints;
+using LlmOps.BudgetPolicy;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddInfrastructureLogging(args);
@@ -23,18 +25,30 @@ builder.Services.AddSingleton<PromptRepository>(services =>
         services.GetRequiredService<ILogger<PromptRepository>>()));
 builder.Services.AddSingleton<RequestRepository>(services =>
     new RequestRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>()));
+builder.Services.AddSingleton<BudgetRepository>(services =>
+    new BudgetRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>(),
+        services.GetRequiredService<ILogger<BudgetRepository>>()));
+builder.Services.AddSingleton<ModelPriceRepository>(services =>
+    new ModelPriceRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>(),
+        services.GetRequiredService<ILogger<ModelPriceRepository>>()));
+builder.Services.AddSingleton<BudgetPolicyStore>(services =>
+    new BudgetPolicyStore(dbConn, services.GetRequiredService<PostgresOperationLogger>()));
+builder.Services.AddSingleton<BudgetPolicyEvaluator>();
 builder.Services.AddHostedService<PostgresHealthMonitor>(services =>
     new PostgresHealthMonitor(dbConn, services.GetRequiredService<ILogger<PostgresHealthMonitor>>(),
         services.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<InfrastructureLoggingOptions>>(),
         services.GetRequiredService<PromptRepository>(), services.GetRequiredService<PostgresAvailability>()));
 var app = builder.Build();
 app.UseMiddleware<LoggingMiddleware>();
+app.MapBudgetEndpoints();
+app.MapModelPriceEndpoints();
 
 app.MapPost("/chat", async (
     ChatIn body, 
     IHttpClientFactory httpFactory,
     PromptRepository prompts, 
     RequestRepository requests, 
+    BudgetPolicyEvaluator budgetPolicy,
     HttpContext context, 
     ModelRouter router) =>
 {
@@ -46,6 +60,11 @@ app.MapPost("/chat", async (
 
     // routing (W2): обираємо модель за задачею.
     var model = router.Route(body.Message, defaultModel);
+    var decision = await budgetPolicy.EvaluateAsync(model);
+    if (decision.Model is null)
+        return Results.Json(new { error = "Model prices unavailable", request_id = requestId }, statusCode: 503);
+    model = decision.Model;
+    var pr = decision.Price;
 
     // Беремо активний промпт і його версію з реєстру.
     var prompt = await prompts.GetActivePrompt();
@@ -71,6 +90,7 @@ app.MapPost("/chat", async (
     string? toolCall = null;
     string? finishReason = null;
     int promptTokens = 0, completionTokens = 0, status = 0; // 0 = відповіді не було
+    var usageAvailable = false;
     try
     {
         var response = await http.PostAsync(
@@ -99,6 +119,7 @@ app.MapPost("/chat", async (
         var usage = doc.RootElement.GetProperty("usage");
         promptTokens = usage.GetProperty("prompt_tokens").GetInt32();
         completionTokens = usage.GetProperty("completion_tokens").GetInt32();
+        usageAvailable = true;
     }
     catch
     {
@@ -109,8 +130,11 @@ app.MapPost("/chat", async (
 
     var latencyMs = (int)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
 
-    // cost (W2): порахувати tokens * ціна і покласти в cost_usd
-    decimal? costUsd = null;  // TODO(student, W2)
+    // Prices are USD per 1000 tokens. Missing prices/usage mean unknown cost.
+    decimal? costUsd = pr is not null && usageAvailable
+        ? Math.Round(promptTokens / 1000m * pr.PromptTokensPrice
+            + completionTokens / 1000m * pr.CompletionTokensPrice, 6)
+        : null;
 
     // лог кожного запиту — з цього живе observability (W1) і cost (W2)
     await requests.LogRequest(requestId, model, prompt.Version, latencyMs, promptTokens, completionTokens, costUsd, status, finishReason);
@@ -122,7 +146,16 @@ app.MapPost("/chat", async (
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));                                    // ліфнес, не для консолі
 
 app.MapGet("/observability", () => Results.Json(new { todo = "aggregate from requests table" }));  // W5: { p95_ms, requests, cache_hit_pct, error_rate_pct, fallback_events }
-app.MapGet("/cost", () => Results.Json(new { todo = "sum cost_usd for today + budget" }));         // W2/W5: { today_usd, budget_usd }
+app.MapGet("/cost", async (RequestRepository requests, BudgetRepository budgets) =>
+{
+    var today = await requests.GetTodayCost();
+    var budget = await budgets.GetAmount();
+    return Results.Json(new
+    {
+        today_usd = Math.Round(today, 4),
+        budget_usd = budget
+    });
+});
 
 // W1: [ { name, version, active } ]
 app.MapGet("/prompts", async (PromptRepository prompts) =>

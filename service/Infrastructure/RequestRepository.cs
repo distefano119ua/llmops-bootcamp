@@ -5,6 +5,17 @@ namespace LlmOps.Infrastructure;
 
 public sealed class RequestRepository(string connectionString, PostgresOperationLogger operations)
 {
+    public Task<decimal> GetTodayCost() => operations.Run("select", async () =>
+    {
+        await using var db = new NpgsqlConnection(connectionString);
+        await db.OpenAsync();
+        await using var command = new NpgsqlCommand("""
+            SELECT coalesce(sum(cost_usd), 0)
+            FROM requests WHERE created_at::date = CURRENT_DATE
+            """, db);
+        return (decimal)(await command.ExecuteScalarAsync())!;
+    });
+
     // Помилка запису лога не перериває відповідь користувачу.
     public async Task LogRequest(Guid id, string model, string promptVersion, int latency,
         int promptTokens, int completionTokens, decimal? cost, int status, string? finishReason)
