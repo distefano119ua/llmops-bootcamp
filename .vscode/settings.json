@@ -8,5 +8,6 @@
   // лишається ввімкненим: воно ловить нульової ширини пробіли, які справді
   // ламають код і яких на око не видно.
   "editor.unicodeHighlight.ambiguousCharacters": false,
-  "editor.unicodeHighlight.nonBasicASCII": false
+  "editor.unicodeHighlight.nonBasicASCII": false,
+  "makefile.configureOnOpen": true
 }

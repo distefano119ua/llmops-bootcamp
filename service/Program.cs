@@ -6,10 +6,12 @@ using System.Text;
 using System.Text.Json;
 using LlmOps.Infrastructure;
 using LlmOps.Middleware;
+using LlmOps.Routing;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddInfrastructureLogging(args);
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton<ModelRouter>();
 
 // налаштування беремо з оточення (задаються в docker-compose.yml)
 var gateway = Environment.GetEnvironmentVariable("GATEWAY_URL") ?? "http://gateway:4000";
@@ -28,8 +30,13 @@ builder.Services.AddHostedService<PostgresHealthMonitor>(services =>
 var app = builder.Build();
 app.UseMiddleware<LoggingMiddleware>();
 
-app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory,
-    PromptRepository prompts, RequestRepository requests, HttpContext context) =>
+app.MapPost("/chat", async (
+    ChatIn body, 
+    IHttpClientFactory httpFactory,
+    PromptRepository prompts, 
+    RequestRepository requests, 
+    HttpContext context, 
+    ModelRouter router) =>
 {
     var requestId = Guid.Parse(context.TraceIdentifier);
     var startedAt = DateTimeOffset.UtcNow;
@@ -37,8 +44,8 @@ app.MapPost("/chat", async (ChatIn body, IHttpClientFactory httpFactory,
     // guardrails (W4): тут перевірити вхід на PII / інʼєкції. поки нічого.
     // TODO(student, W4)
 
-    // routing (W2): поки одна модель, а треба обирати за задачею
-    var model = defaultModel;  // TODO(student, W2)
+    // routing (W2): обираємо модель за задачею.
+    var model = router.Route(body.Message, defaultModel);
 
     // Беремо активний промпт і його версію з реєстру.
     var prompt = await prompts.GetActivePrompt();
