@@ -42,8 +42,25 @@ public sealed class FlatJsonConsoleFormatter(
             fields["path"] = context.Request.Path.Value;
         }
 
+        AddStateFields(entry.State, fields, settings);
+        scopeProvider?.ForEachScope((scope, destination) => AddStateFields(scope, destination, settings), fields);
+        if (entry.Exception is not null)
+        {
+            fields["exception_type"] = entry.Exception.GetType().Name;
+            fields["exception_message"] = entry.Exception.Message;
+            if (settings.IncludeExceptionStackTrace)
+                fields["exception_stack_trace"] = entry.Exception.StackTrace;
+        }
+
+        // WriteLine emits one complete JSON record. Embedded newlines are escaped by the serializer.
+        writer.WriteLine(JsonSerializer.Serialize(fields));
+    }
+
+    private static void AddStateFields(object? source, Dictionary<string, object?> fields,
+        InfrastructureLoggingOptions settings)
+    {
         // Only explicitly permitted scalar properties are emitted; no bodies, SQL or parameters.
-        if (entry.State is IEnumerable<KeyValuePair<string, object?>> state)
+        if (source is IEnumerable<KeyValuePair<string, object?>> state)
         {
             foreach (var (key, value) in state)
             {
@@ -61,16 +78,6 @@ public sealed class FlatJsonConsoleFormatter(
                 }
             }
         }
-        if (entry.Exception is not null)
-        {
-            fields["exception_type"] = entry.Exception.GetType().Name;
-            fields["exception_message"] = entry.Exception.Message;
-            if (settings.IncludeExceptionStackTrace)
-                fields["exception_stack_trace"] = entry.Exception.StackTrace;
-        }
-
-        // WriteLine emits one complete JSON record. Embedded newlines are escaped by the serializer.
-        writer.WriteLine(JsonSerializer.Serialize(fields));
     }
 
     private static bool IsScalar(object? value) => value is null or string or bool or char
