@@ -167,3 +167,10 @@ CREATE TRIGGER budget_audit
     FOR EACH ROW EXECUTE FUNCTION audit_budget();
 
 COMMIT;
+
+INSERT INTO model_prices (model, prompt_tokens_price, completion_tokens_price, "user") VALUES
+        ('mock-mini',   0.00015, 0.0006, 'seed'),
+        ('mock-strong', 0.0025,  0.01,   'seed')
+    ON CONFLICT (model) DO NOTHING;
+    INSERT INTO budget (id, budget, "user") VALUES (1, 5.00, 'seed')
+    ON CONFLICT (id) DO NOTHING;
