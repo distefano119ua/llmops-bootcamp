@@ -11,7 +11,9 @@ public sealed class InfrastructureLoggingOptions
     public int DatabaseHealthIntervalSeconds { get; set; } = 5;
     public int DatabaseHealthTimeoutSeconds { get; set; } = 3;
     public string[] ExcludedPaths { get; set; } = [];
-    public string[] StateFields { get; set; } = ["dependency", "operation", "duration_ms", "address", "connection_id", "request_id"];
+    public string[] StateFields { get; set; } = ["dependency", "operation", "duration_ms", "address", "connection_id", "request_id",
+        "model", "user", "budget", "completion_tokens_price", "prompt_tokens_price",
+        "today_usd", "threshold_percent", "usage_percent", "requested_model", "selected_model"];
     public Dictionary<string, string> FrameworkMessages { get; set; } = new()
     {
         ["Microsoft.AspNetCore.Server.Kestrel:13"] = "Unhandled application exception"
@@ -34,6 +36,7 @@ public static class LoggingConfig
         builder.Services.AddSingleton<PostgresOperationLogger>();
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole(options => options.FormatterName = FlatJsonConsoleFormatter.FormatterName);
-        builder.Logging.AddConsoleFormatter<FlatJsonConsoleFormatter, ConsoleFormatterOptions>();
+        builder.Logging.AddConsoleFormatter<FlatJsonConsoleFormatter, ConsoleFormatterOptions>(
+            options => options.IncludeScopes = true);
     }
 }

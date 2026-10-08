@@ -15,7 +15,8 @@ Configuration: `logging_config.json`. All console events use flat JSON, one even
   unrelated exceptions and cancellation remain visible; POST is never excluded.
   Known database outages on polling routes return HTTP 503 quietly: availability
   is already reported by the shared `db.unavailable` event.
-- `StateFields`: permitted scalar structured properties. Reserved fields cannot be overwritten.
+- `StateFields`: permitted scalar structured properties from log state and `BeginScope`.
+  Scope properties are emitted as flat fields. Reserved fields cannot be overwritten.
   `status_code` is always emitted for completed HTTP responses.
 - `FrameworkMessages`: short message overrides keyed by `category:event_id`.
   Kestrel event 13 uses `Unhandled application exception`; its structured connection
@@ -33,6 +34,22 @@ Environment variables override JSON, e.g. `InfrastructureLogging__ServiceName` o
 - `http.response.completed`: actual HTTP status and elapsed time for the full request pipeline.
 - `http.request.failed`: unhandled exception; rethrown to ASP.NET Core.
 - `http.request.aborted`: request cancellation.
+- `budget.created` / `budget.updated` (Information): a budget is successfully committed.
+  One shared service budget. Fields: `budget`, `user`, `operation` (`insert` / `update`).
+- `budget.threshold_reached` (Warning) / `budget.threshold_cleared` (Information):
+  today's spending crosses the 80% budget threshold, checked before `/chat` calls
+  the gateway. Fields include `budget`, `today_usd`, `threshold_percent`, `usage_percent`,
+  `requested_model`, `selected_model`. Alerts are deduplicated per process; a new DB
+  day or changed budget rearms them. See `../BudgetPolicy/README.md`.
+- `budget.prices_unavailable` (Warning): no priced model is available while the
+  threshold is reached; `/chat` returns 503 before calling the gateway. Deduplicated.
+- `budget.model.degraded` (Debug): a request selects a cheaper model.
+- `model_price.created` / `model_price.updated` (Information): model prices are successfully
+  committed. Fields: `model`, `completion_tokens_price`, `prompt_tokens_price`, `user`,
+  `operation` (`insert` / `update`). Both repositories use `logger.LogInformation` with
+  short fixed messages. The action comes from the audit trigger within the write
+  transaction, so concurrent upserts still distinguish creation from updating.
+  Failed writes and validation errors do not produce a success event.
 - `db.operation.completed` (Debug) / `db.operation.failed` (Error): Postgres select/update/insert,
   including connection opening, execution and cleanup in `duration_ms`.
   Connectivity failures use shared `db.unavailable` instead of per-operation errors.
@@ -65,9 +82,12 @@ Environment variables override JSON, e.g. `InfrastructureLogging__ServiceName` o
 
 Logs are written to stdout. `X-Request-ID` is returned in HTTP responses; the same ID
 is used by HTTP logs, DB logs and the existing chat response/DB request record.
-Request/response bodies, query strings, SQL, SQL parameters, prompts, model names
-and token usage are not included in infrastructure events. The existing business
-records in Postgres remain separate.
+Request/response bodies, query strings, SQL, SQL parameters, prompts and token usage
+are not included. Management events include the actor and saved amounts explicitly;
+price events also include the model name. Budget write events have no model field;
+policy events include requested/selected model names and budget spending.
+Chat/model invocation data is not logged.
+The existing business records in Postgres remain separate.
 
 Custom infrastructure messages are short fixed text. Operation, duration and HTTP
 status appear only in their separate fields, not repeated in `message`.
@@ -84,7 +104,8 @@ Successful console polling is quiet by default. To inspect the full request flow
 set `Logging.LogLevel.LlmOps.Middleware` to `Debug` and remove `/prompts` from
 `ExcludedPaths`. The request then produces incoming HTTP, Postgres operation and
 completed HTTP events with the same `request_id`. Normal user actions produce one
-completed HTTP event at Information level. Framework startup events have no request ID.
+completed HTTP event at Information level; successful budget/price writes also emit
+one management event. Framework startup events have no request ID.
 An unavailable Postgres produces `db.unavailable` once per observed outage.
 For propagated connectivity errors, middleware returns HTTP 503 without rethrowing
 to Kestrel, avoiding duplicate `http.request.failed` and `ApplicationError` events.

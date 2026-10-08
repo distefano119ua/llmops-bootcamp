@@ -15,7 +15,9 @@
     "DatabaseHealthIntervalSeconds": 5,
     "DatabaseHealthTimeoutSeconds": 3,
     "ExcludedPaths": ["/health", "/observability", "/cost", "/prompts", "/providers", "/approvals"],
-    "StateFields": ["dependency", "operation", "duration_ms", "address", "connection_id", "request_id"],
+    "StateFields": ["dependency", "operation", "duration_ms", "address", "connection_id", "request_id",
+      "model", "user", "budget", "completion_tokens_price", "prompt_tokens_price",
+      "today_usd", "threshold_percent", "usage_percent", "requested_model", "selected_model"],
     "FrameworkMessages": {
       "Microsoft.AspNetCore.Server.Kestrel:13": "Unhandled application exception"
     }

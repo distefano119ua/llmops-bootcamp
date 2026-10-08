@@ -20,3 +20,10 @@ HTTP middleware і логування операцій PostgreSQL розташо
 Налаштування рівнів, полів і виключених HTTP-шляхів — у
 [`middleware/logging_config.json`](middleware/logging_config.json).
 Одна подія — один плоский JSON-рядок у stdout; HTTP і БД пов'язані через `request_id`.
+
+## Політика бюджету
+
+[`BudgetPolicy/`](BudgetPolicy/README.md) перевіряє сьогоднішні витрати перед
+відправленням `/chat` у gateway. При досягненні 80% загального бюджету обирається
+дешевша модель з `model_prices` за сумою цін вхідних і вихідних токенів;
+перехід через поріг дає один Warning у JSON-логах.

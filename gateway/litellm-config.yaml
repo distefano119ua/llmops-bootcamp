@@ -14,6 +14,7 @@ model_list:
       model: openai/mock
       api_base: http://mock-provider:9000/v1
       api_key: "sk-mock"
+
   - model_name: mock-strong
     litellm_params:
       model: openai/mock
@@ -57,5 +58,6 @@ model_list:
       api_version: os.environ/AZURE_API_VERSION
 
 litellm_settings:
-  drop_params: true
+  drop_params: true # відкидає непідтримувані OpenAI-параметри замість помилки, допомагає працювати з різними провайдерами, але не усуває всі можливі несумісності
   num_retries: 0   # збої віддаємо в сервіс (reliability — робота студента), не ретраїмо приховано
+                   # вимикає повторні спроби на рівні LiteLLM, щоб помилка одразу повернулася в сервіс
