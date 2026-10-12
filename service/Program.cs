@@ -9,17 +9,29 @@ using LlmOps.Middleware;
 using LlmOps.Routing;
 using LlmOps.Endpoints;
 using LlmOps.BudgetPolicy;
+using LlmOps.Tools;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddInfrastructureLogging(args);
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ModelRouter>();
+builder.Services.AddSingleton<ToolRegistry>();
 
 // налаштування беремо з оточення (задаються в docker-compose.yml)
 var gateway = Environment.GetEnvironmentVariable("GATEWAY_URL") ?? "http://gateway:4000";
 var dbConn = Environment.GetEnvironmentVariable("DB_CONN")
     ?? "Host=postgres;Database=llmops;Username=llmops;Password=llmops";
 var defaultModel = Environment.GetEnvironmentVariable("MODEL") ?? "mock";
+var redisConnection = Environment.GetEnvironmentVariable("REDIS_CONN") ?? "redis:6379";
+var redisCacheTtlSetting = Environment.GetEnvironmentVariable("ttl-redis-cache") ?? "60";
+if (!int.TryParse(redisCacheTtlSetting, out var redisCacheTtlSeconds) || redisCacheTtlSeconds <= 0)
+    throw new InvalidOperationException("ttl-redis-cache must be a positive number of seconds.");
+var redisCacheTtl = TimeSpan.FromSeconds(redisCacheTtlSeconds);
+builder.Services.AddSingleton<RedisAvailability>();
+builder.Services.AddSingleton<RedisResponseCache>(services =>
+    new RedisResponseCache(redisConnection, services.GetRequiredService<ILogger<RedisResponseCache>>(),
+        services.GetRequiredService<RedisAvailability>(), redisCacheTtl));
+builder.Services.AddHostedService<RedisHealthMonitor>();
 builder.Services.AddSingleton<PromptRepository>(services =>
     new PromptRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>(),
         services.GetRequiredService<ILogger<PromptRepository>>()));
@@ -48,6 +60,8 @@ app.MapPost("/chat", async (
     IHttpClientFactory httpFactory,
     PromptRepository prompts, 
     RequestRepository requests, 
+    RedisResponseCache cache,
+    ToolRegistry toolRegistry,
     BudgetPolicyEvaluator budgetPolicy,
     HttpContext context, 
     ModelRouter router) =>
@@ -71,7 +85,19 @@ app.MapPost("/chat", async (
     var systemPrompt = prompt.Body;
 
     // cache (W3): перед викликом глянути в Redis — раптом вже відповідали
-    // TODO(student, W3)
+    var cacheKey = RedisResponseCache.CreateKey(model, prompt, body.Message);
+    var cached = await cache.GetAsync(cacheKey);
+    if (cached is not null)
+    {
+        var cachedLatencyMs = (int)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+        await requests.LogRequest(requestId, model, prompt.Version, cachedLatencyMs,
+            0, 0, 0m, 200, cached.FinishReason);
+        return Results.Json(new
+        {
+            request_id = requestId, content = cached.Content, tool = (string?)null,
+            latency_ms = cachedLatencyMs
+        });
+    }
 
     // fallback (W4): якщо тут 429/5xx — піти на іншого провайдера. поки один виклик.
     // TODO(student, W4)
@@ -88,15 +114,17 @@ app.MapPost("/chat", async (
     var http = httpFactory.CreateClient();
     var answer = "";
     string? toolCall = null;
+    var pendingToolCalls = new List<(string Name, string Arguments)>();
     string? finishReason = null;
     int promptTokens = 0, completionTokens = 0, status = 0; // 0 = відповіді не було
     var usageAvailable = false;
     try
     {
-        var response = await http.PostAsync(
+        using var response = await http.PostAsync(
             $"{gateway}/v1/chat/completions",
             new StringContent(payload, Encoding.UTF8, "application/json"));
         status = (int)response.StatusCode;
+        response.EnsureSuccessStatusCode();
         var rawJson = await response.Content.ReadAsStringAsync();
 
         using var doc = JsonDocument.Parse(rawJson);
@@ -107,13 +135,19 @@ app.MapPost("/chat", async (
             finishReason = reason.GetString();
         answer = message.GetProperty("content").GetString() ?? "";
 
-        // tools + HITL (W3/W4): якщо модель попросила інструмент — виконати;
-        // перед незворотною дією (створити тікет) спитати людину. поки лише читаємо назву.
-        // TODO(student, W3/W4)
+        // W3: зберігаємо виклики, щоб виконати їх після читання відповіді моделі.
         if (message.TryGetProperty("tool_calls", out var tools)
             && tools.ValueKind == JsonValueKind.Array && tools.GetArrayLength() > 0)
         {
-            toolCall = tools[0].GetProperty("function").GetProperty("name").GetString();
+            foreach (var call in tools.EnumerateArray())
+            {
+                var function = call.GetProperty("function");
+                var name = function.GetProperty("name").GetString() ?? "";
+                var arguments = function.TryGetProperty("arguments", out var toolArguments)
+                    ? toolArguments.GetString() ?? "{}" : "{}";
+                pendingToolCalls.Add((name, arguments));
+            }
+            toolCall = pendingToolCalls[0].Name;
         }
 
         var usage = doc.RootElement.GetProperty("usage");
@@ -127,6 +161,27 @@ app.MapPost("/chat", async (
         // TODO(student, W4): тут краще graceful degradation
         answer = "Сервіс тимчасово недоступний.";
     }
+
+    if (status >= 200 && status < 300 && usageAvailable)
+    {
+        foreach (var call in pendingToolCalls)
+        {
+            var result = toolRegistry.RunTool(call.Name, call.Arguments);
+            if (!result.Success)
+            {
+                // Не підміняємо відмову інструмента повідомленням про збій gateway.
+                answer = result.Content;
+                break;
+            }
+
+            answer = $"{answer} ({result.Content})";
+        }
+    }
+
+    // Tool-відповіді поки не кешуємо: статус замовлення може змінитися.
+    if (status >= 200 && status < 300 && usageAvailable && toolCall is null
+        && (finishReason is null or "stop") && !string.IsNullOrWhiteSpace(answer))
+        await cache.SetAsync(cacheKey, new CachedResponse(answer, finishReason));
 
     var latencyMs = (int)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
 

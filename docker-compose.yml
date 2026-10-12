@@ -19,8 +19,10 @@ services:
       - ASPNETCORE_ENVIRONMENT=Development
       - GATEWAY_URL=http://gateway:4000
       - DB_CONN=Host=postgres;Database=llmops;Username=llmops;Password=llmops
+      - REDIS_CONN=redis:6379
+      - ttl-redis-cache=60 # TTL кешу в секундах
       - MODEL=${MODEL:-mock}   # mock (за замовч.) або gpt-5-mini / claude-haiku (потрібен ключ у gateway/.env)
-    depends_on: [gateway, postgres]
+    depends_on: [gateway, postgres, redis]
 
   gateway:
     logging: *default-logging
@@ -55,11 +57,10 @@ services:
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
       - pgdata:/var/lib/postgresql/data
 
-  # --- optional (advanced): docker compose --profile advanced up ---
+  # Redis для кешування відповідей (HW3).
   redis:
     image: redis:7
     logging: *default-logging
-    profiles: ["advanced"]
     ports: ["6379:6379"]
 
 volumes:
