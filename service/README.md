@@ -32,7 +32,10 @@ HTTP middleware і логування операцій PostgreSQL розташо
 
 [`Infrastructure/RedisResponseCache.cs`](Infrastructure/RedisResponseCache.cs) працює
 з Redis через StackExchange.Redis. Адреса задається змінною `REDIS_CONN`
-(у Compose — `redis:6379`). Redis запускається у звичайному стеку без профілю `advanced`.
+(у Compose — `redis:6379`). Redis опційний і запускається з профілем `advanced`:
+`make up-redis` — стек із Redis, `make up` — основний стек без Redis,
+`make redis` — додати Redis до вже запущеного стеку.
+`make service` перезбирає лише сервіс без запуску залежностей.
 З'єднання спільне для всіх запитів. Фоновий `RedisHealthMonitor` перевіряє Redis
 після запуску сервісу, потім раз на 5 секунд; він працює незалежно від запитів у чат.
 
@@ -85,7 +88,7 @@ JSON-логи доступності з'являються лише при зм�
 ціни для моделей, які обирає маршрутизатор і бюджетна політика.
 
 ```bash
-docker compose -p llmops-bootcamp up -d --build service
+make up-redis
 
 # Після прогріву gateway надішліть двічі однакове повідомлення.
 curl -X POST http://localhost:8080/chat -H 'Content-Type: application/json' \
@@ -117,8 +120,8 @@ curl -X POST http://localhost:8080/prompts/v2/activate
 Після запуску сервісу в логах має бути `redis.available`. Зупиніть лише Redis:
 
 ```bash
-docker compose -p llmops-bootcamp stop redis
-docker compose -p llmops-bootcamp logs -f service
+make redis-stop
+make logs SERVICE=service
 ```
 
 Протягом наступної перевірки з'явиться один `redis.unavailable`.
@@ -126,7 +129,7 @@ docker compose -p llmops-bootcamp logs -f service
 попереджень про недоступність Redis. Поверніть Redis:
 
 ```bash
-docker compose -p llmops-bootcamp start redis
+make redis
 ```
 
 Після відновлення з'єднання та успішної перевірки з'явиться один `redis.recovered`.

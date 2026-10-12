@@ -17,7 +17,7 @@
 | Postgres | базова схема | розширює під logs / cost / prompt records |
 | Eval runner (Python) | skeleton | dataset, graders, пороги |
 | CI (GitHub Actions) | шаблон `.github/workflows/eval-gate.yml` | eval gate |
-| Redis | сервіс для кешу відповідей | ключ кешу, читання/запис, hits / misses |
+| Redis | опційний сервіс у профілі advanced | ключ кешу, читання/запис, hits / misses |
 
 ## Запуск (мінімальний стек)
 
@@ -26,5 +26,7 @@ docker compose up --build
 ```
 
 Піднімаються: UI (`:4200`), сервіс (`:8080`), LiteLLM (`:4000`), Postgres, mock provider.
-Для mock реальні ключі не потрібні. Redis запускається разом із сервісом для кешування відповідей.
+Для mock реальні ключі не потрібні. Redis опційний: `make up-redis` запускає стек
+із кешем, `make up` — основний стек без Redis. Для додавання Redis до запущеного
+стеку — `make redis`; напряму через Compose — `docker compose --profile advanced up`.
 Для оцінки якості (model-based evals): `cp gateway/.env.example gateway/.env` і заповнити ключі.
