@@ -33,7 +33,7 @@ public sealed class RedisAvailability(ILogger<RedisAvailability> logger)
             if (available == false) return;
             available = false;
             InfrastructureLog.Write(logger, LogLevel.Warning, new EventId(1311, "redis.unavailable"),
-                "Redis unavailable; response cache bypassed", null,
+                "Redis unavailable; using memory response cache", null,
                 ("dependency", "redis"), ("error_type", exception?.GetType().Name));
         }
     }

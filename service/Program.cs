@@ -28,9 +28,11 @@ if (!int.TryParse(redisCacheTtlSetting, out var redisCacheTtlSeconds) || redisCa
     throw new InvalidOperationException("ttl-redis-cache must be a positive number of seconds.");
 var redisCacheTtl = TimeSpan.FromSeconds(redisCacheTtlSeconds);
 builder.Services.AddSingleton<RedisAvailability>();
+builder.Services.AddSingleton<MemoryResponseCache>(_ => new MemoryResponseCache(redisCacheTtl));
 builder.Services.AddSingleton<RedisResponseCache>(services =>
     new RedisResponseCache(redisConnection, services.GetRequiredService<ILogger<RedisResponseCache>>(),
-        services.GetRequiredService<RedisAvailability>(), redisCacheTtl));
+        services.GetRequiredService<RedisAvailability>(), redisCacheTtl,
+        services.GetRequiredService<MemoryResponseCache>()));
 builder.Services.AddHostedService<RedisHealthMonitor>();
 builder.Services.AddSingleton<PromptRepository>(services =>
     new PromptRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>(),

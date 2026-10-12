@@ -8,7 +8,7 @@ namespace LlmOps.Infrastructure;
 public sealed record CachedResponse(string Content, string? FinishReason);
 
 public sealed class RedisResponseCache(string configuration, ILogger<RedisResponseCache> logger,
-    RedisAvailability availability, TimeSpan ttl) : IDisposable
+    RedisAvailability availability, TimeSpan ttl, MemoryResponseCache memoryCache) : IDisposable
 {
     private readonly SemaphoreSlim connectionLock = new(1, 1);
     private ConnectionMultiplexer? connection;
@@ -29,6 +29,7 @@ public sealed class RedisResponseCache(string configuration, ILogger<RedisRespon
     public async Task<CachedResponse?> GetAsync(string key)
     {
         CachedResponse? response = null;
+        var source = "redis";
         // Поки Redis недоступний, тільки фоновий монітор перевіряє відновлення.
         if (!availability.IsUnavailable)
         {
@@ -54,31 +55,47 @@ public sealed class RedisResponseCache(string configuration, ILogger<RedisRespon
             }
         }
 
+        // Memory залишається резервним джерелом і після відновлення Redis.
+        if (response is null || string.IsNullOrWhiteSpace(response.Content))
+        {
+            response = memoryCache.Get(key);
+            source = "memory";
+        }
+
         if (response is not null && !string.IsNullOrWhiteSpace(response.Content))
         {
             Interlocked.Increment(ref hits);
-            LogLookup(true);
+            LogLookup(true, source);
             return response;
         }
 
         Interlocked.Increment(ref misses);
-        LogLookup(false);
+        LogLookup(false, source);
         return null;
     }
 
     public async Task SetAsync(string key, CachedResponse response)
     {
-        if (availability.IsUnavailable) return;
+        if (availability.IsUnavailable)
+        {
+            memoryCache.Set(key, response);
+            return;
+        }
         try
         {
             var db = await GetDatabaseAsync();
-            if (db is null) return;
+            if (db is null)
+            {
+                memoryCache.Set(key, response);
+                return;
+            }
             await db.StringSetAsync(key, JsonSerializer.Serialize(response), expiry: ttl);
             availability.ReportAvailable();
         }
         catch (Exception ex)
         {
             availability.ReportUnavailable(ex);
+            memoryCache.Set(key, response);
         }
     }
 
@@ -132,10 +149,10 @@ public sealed class RedisResponseCache(string configuration, ILogger<RedisRespon
         }
     }
 
-    private void LogLookup(bool hit) => InfrastructureLog.Write(logger, LogLevel.Information,
+    private void LogLookup(bool hit, string source) => InfrastructureLog.Write(logger, LogLevel.Information,
         new EventId(hit ? 1300 : 1301, hit ? "cache.hit" : "cache.miss"),
         hit ? "Response cache hit" : "Response cache miss", null,
-        ("dependency", "redis"), ("cache_hits", Hits), ("cache_misses", Misses));
+        ("dependency", source), ("cache_hits", Hits), ("cache_misses", Misses));
 
     private void LogFailure(string operation, Exception ex) => InfrastructureLog.Write(logger,
         LogLevel.Warning, new EventId(1302, "cache.operation.failed"), "Response cache operation failed",
