@@ -2,6 +2,11 @@ namespace LlmOps.Routing;
 
 public sealed class ModelRouter
 {
+    private long fallbackEvents;
+
+    public long FallbackEvents => Interlocked.Read(ref fallbackEvents);
+    public long RecordFallback() => Interlocked.Increment(ref fallbackEvents);
+
     // [W2] проста маршрутизація: ескалацію — на сильну модель.
     public string Route(string message, string defaultModel)
     {
@@ -14,6 +19,13 @@ public sealed class ModelRouter
         return isEscalation ? "mock-strong" : "mock-mini";
     }
 
-    // [W4] цей рядок стане кодом.
-    // fallback chain: mock-strong -> mock-mini -> контрольована помилка
+    // Ланцюг будується після бюджетної політики за фактично вибраною моделлю.
+    public string[] GetFallbackChain(string model) => model switch
+    {
+        "mock-strong" => new[] { model, "mock-mini" },
+        "mock-mini" => new[] { model, "mock-azure-gpt-5" },
+        "mock-azure-gpt-5" => new[] { model, "mock-mini" },
+        "mock" => new[] { model, "mock-azure-gpt-5" },
+        _ => new[] { model }
+    };
 }

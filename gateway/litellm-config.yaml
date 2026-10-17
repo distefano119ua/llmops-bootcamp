@@ -8,7 +8,7 @@ model_list:
       api_base: http://mock-provider:9000/v1
       api_key: "sk-mock"
 
-  # дві "моделі" на mock — щоб routing (W2) мав із чого обирати без реального ключа
+  # mock-аліаси для routing і fallback без реальних ключів
   - model_name: mock-mini
     litellm_params:
       model: openai/mock
@@ -16,6 +16,13 @@ model_list:
       api_key: "sk-mock"
 
   - model_name: mock-strong
+    litellm_params:
+      model: openai/mock
+      api_base: http://mock-provider:9000/v1
+      api_key: "sk-mock"
+
+  # Навчальна дорога резервна модель; звертається до локального mock-провайдера.
+  - model_name: mock-azure-gpt-5
     litellm_params:
       model: openai/mock
       api_base: http://mock-provider:9000/v1

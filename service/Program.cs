@@ -2,8 +2,6 @@
 // (яку модель брати, коли ретраїти, скільки коштує) робимо тут.
 // MODEL=mock — дефолт, грошей не треба. MODEL=gpt-5-mini або claude-haiku + ключ у gateway/.env — реальна модель.
 
-using System.Text;
-using System.Text.Json;
 using LlmOps.Infrastructure;
 using LlmOps.Middleware;
 using LlmOps.Routing;
@@ -22,6 +20,11 @@ var gateway = Environment.GetEnvironmentVariable("GATEWAY_URL") ?? "http://gatew
 var dbConn = Environment.GetEnvironmentVariable("DB_CONN")
     ?? "Host=postgres;Database=llmops;Username=llmops;Password=llmops";
 var defaultModel = Environment.GetEnvironmentVariable("MODEL") ?? "mock";
+var halfOpenSetting = Environment.GetEnvironmentVariable("circuit-breaker-half-open") ?? "true";
+if (!bool.TryParse(halfOpenSetting, out var halfOpenEnabled))
+    throw new InvalidOperationException("circuit-breaker-half-open must be true or false.");
+builder.Services.AddSingleton<ModelCircuitBreaker>(services =>
+    new ModelCircuitBreaker(halfOpenEnabled, services.GetRequiredService<ILogger<ModelCircuitBreaker>>()));
 var redisConnection = Environment.GetEnvironmentVariable("REDIS_CONN") ?? "redis:6379";
 var redisCacheTtlSetting = Environment.GetEnvironmentVariable("ttl-redis-cache") ?? "60";
 if (!int.TryParse(redisCacheTtlSetting, out var redisCacheTtlSeconds) || redisCacheTtlSeconds <= 0)
@@ -60,12 +63,14 @@ app.MapModelPriceEndpoints();
 app.MapPost("/chat", async (
     ChatIn body, 
     IHttpClientFactory httpFactory,
-    PromptRepository prompts, 
+    PromptRepository prompts,
+    ModelPriceRepository prices,
     RequestRepository requests, 
     RedisResponseCache cache,
     ToolRegistry toolRegistry,
     BudgetPolicyEvaluator budgetPolicy,
     HttpContext context, 
+    ModelCircuitBreaker circuitBreaker,
     ModelRouter router) =>
 {
     var requestId = Guid.Parse(context.TraceIdentifier);
@@ -101,70 +106,59 @@ app.MapPost("/chat", async (
         });
     }
 
-    // fallback (W4): якщо тут 429/5xx — піти на іншого провайдера. поки один виклик.
-    // TODO(student, W4)
-    var payload = JsonSerializer.Serialize(new
-    {
-        model,
-        messages = new object[]
-        {
-            new { role = "system", content = systemPrompt },
-            new { role = "user", content = body.Message }
-        }
-    });
-
+    var chain = router.GetFallbackChain(model);
     var http = httpFactory.CreateClient();
-    var answer = "";
-    string? toolCall = null;
-    var pendingToolCalls = new List<(string Name, string Arguments)>();
-    string? finishReason = null;
-    int promptTokens = 0, completionTokens = 0, status = 0; // 0 = відповіді не було
-    var usageAvailable = false;
-    try
+    var gatewayResult = GatewayResult.Failed(0, "not_called");
+    for (var i = 0; i < chain.Length; i++)
     {
-        using var response = await http.PostAsync(
-            $"{gateway}/v1/chat/completions",
-            new StringContent(payload, Encoding.UTF8, "application/json"));
-        status = (int)response.StatusCode;
-        response.EnsureSuccessStatusCode();
-        var rawJson = await response.Content.ReadAsStringAsync();
-
-        using var doc = JsonDocument.Parse(rawJson);
-        var choice = doc.RootElement.GetProperty("choices")[0];
-        var message = choice.GetProperty("message");
-        if (choice.TryGetProperty("finish_reason", out var reason)
-            && reason.ValueKind == JsonValueKind.String)
-            finishReason = reason.GetString();
-        answer = message.GetProperty("content").GetString() ?? "";
-
-        // W3: зберігаємо виклики, щоб виконати їх після читання відповіді моделі.
-        if (message.TryGetProperty("tool_calls", out var tools)
-            && tools.ValueKind == JsonValueKind.Array && tools.GetArrayLength() > 0)
+        var previousResult = gatewayResult;
+        model = chain[i];
+        gatewayResult = await circuitBreaker.ExecuteAsync(model, async () =>
         {
-            foreach (var call in tools.EnumerateArray())
+            context.RequestAborted.ThrowIfCancellationRequested();
+            if (i > 0)
             {
-                var function = call.GetProperty("function");
-                var name = function.GetProperty("name").GetString() ?? "";
-                var arguments = function.TryGetProperty("arguments", out var toolArguments)
-                    ? toolArguments.GetString() ?? "{}" : "{}";
-                pendingToolCalls.Add((name, arguments));
+                var transitions = router.RecordFallback();
+                InfrastructureLog.Write(app.Logger, LogLevel.Warning,
+                    new EventId(1500, "gateway.fallback"), "Switching to fallback model", null,
+                    ("requested_model", chain[i - 1]), ("selected_model", chain[i]),
+                    ("status_code", previousResult.Status), ("error_type", previousResult.Error),
+                    ("fallback_events", transitions));
             }
-            toolCall = pendingToolCalls[0].Name;
-        }
 
-        var usage = doc.RootElement.GetProperty("usage");
-        promptTokens = usage.GetProperty("prompt_tokens").GetInt32();
-        completionTokens = usage.GetProperty("completion_tokens").GetInt32();
-        usageAvailable = true;
+            return await GatewayClient.CallGateway(http, gateway, model, systemPrompt,
+                body.Message, context.RequestAborted);
+        });
+        if (gatewayResult.Ok || !gatewayResult.CanFallback) break;
     }
-    catch
+
+    var answer = gatewayResult.Ok ? gatewayResult.Answer
+        : "Вибачте, тимчасово не можемо обробити ваш запит. Спробуйте, будь ласка, пізніше.";
+    var pendingToolCalls = gatewayResult.ToolCalls;
+    var toolCall = pendingToolCalls.Count > 0 ? pendingToolCalls[0].Name : null;
+    var finishReason = gatewayResult.FinishReason;
+    var promptTokens = gatewayResult.PromptTokens;
+    var completionTokens = gatewayResult.CompletionTokens;
+    var usageAvailable = gatewayResult.UsageAvailable;
+    // HTTP 200 з непридатним JSON також має бути помилкою у метриках запитів.
+    var status = !gatewayResult.Ok && (gatewayResult.Status is >= 200 and < 300)
+        ? 502 : gatewayResult.Status;
+
+    if (!gatewayResult.Ok)
+        InfrastructureLog.Write(app.Logger, LogLevel.Warning,
+            new EventId(1501, "gateway.failed"), "Gateway request failed", null,
+            ("model", model), ("status_code", gatewayResult.Status),
+            ("error_type", gatewayResult.Error));
+
+    if (gatewayResult.Ok && model != decision.Model)
     {
-        // мережа/gateway недоступні або відповідь не розпарсилась (status лишиться 0/5xx).
-        // TODO(student, W4): тут краще graceful degradation
-        answer = "Сервіс тимчасово недоступний.";
+        var actualPrice = await prices.GetByModel(model);
+        pr = actualPrice is null ? null : new BudgetModelPrice(actualPrice.Model,
+            actualPrice.PromptTokensPrice, actualPrice.CompletionTokensPrice);
+        cacheKey = RedisResponseCache.CreateKey(model, prompt, body.Message);
     }
 
-    if (status >= 200 && status < 300 && usageAvailable)
+    if (gatewayResult.Ok)
     {
         foreach (var call in pendingToolCalls)
         {
@@ -181,7 +175,7 @@ app.MapPost("/chat", async (
     }
 
     // Tool-відповіді поки не кешуємо: статус замовлення може змінитися.
-    if (status >= 200 && status < 300 && usageAvailable && toolCall is null
+    if (gatewayResult.Ok && usageAvailable && toolCall is null
         && (finishReason is null or "stop") && !string.IsNullOrWhiteSpace(answer))
         await cache.SetAsync(cacheKey, new CachedResponse(answer, finishReason));
 
