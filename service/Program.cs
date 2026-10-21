@@ -103,7 +103,7 @@ app.MapPost("/chat", async (
     var userMessage = PiiMasker.MaskPii(body.Message);
 
     // routing (W2): обираємо модель за задачею.
-    var model = router.Route(body.Message, defaultModel);
+    var model = router.Route(userMessage, defaultModel);
     var decision = await budgetPolicy.EvaluateAsync(model);
     if (decision.Model is null)
         return Results.Json(new { error = "Model prices unavailable", request_id = requestId }, statusCode: 503);
@@ -115,7 +115,7 @@ app.MapPost("/chat", async (
     var systemPrompt = prompt.Body;
 
     // cache (W3): перед викликом глянути в Redis — раптом вже відповідали
-    var cacheKey = RedisResponseCache.CreateKey(model, prompt, body.Message);
+    var cacheKey = RedisResponseCache.CreateKey(model, prompt, userMessage);
     var cached = await cache.GetAsync(cacheKey);
     if (cached is not null)
     {
@@ -178,7 +178,7 @@ app.MapPost("/chat", async (
         var actualPrice = await prices.GetByModel(model);
         pr = actualPrice is null ? null : new BudgetModelPrice(actualPrice.Model,
             actualPrice.PromptTokensPrice, actualPrice.CompletionTokensPrice);
-        cacheKey = RedisResponseCache.CreateKey(model, prompt, body.Message);
+        cacheKey = RedisResponseCache.CreateKey(model, prompt, userMessage);
     }
 
     if (gatewayResult.Ok)
