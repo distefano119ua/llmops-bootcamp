@@ -21,6 +21,7 @@ services:
       - DB_CONN=Host=postgres;Database=llmops;Username=llmops;Password=llmops
       - REDIS_CONN=redis:6379
       - ttl-redis-cache=60 # TTL кешу в секундах
+      - pending-ttl=15 # Час очікування рішення HITL у секундах
       - circuit-breaker-half-open=true # false: блокувати маршрут на всі 30 секунд без ранніх проб
       - MODEL=${MODEL:-mock}   # mock (за замовч.) або gpt-5-mini / claude-haiku (потрібен ключ у gateway/.env)
     depends_on: [gateway, postgres]
