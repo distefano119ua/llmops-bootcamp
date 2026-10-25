@@ -5,6 +5,8 @@ using LlmOps.Middleware;
 
 namespace LlmOps.Routing;
 
+public sealed record ModelCircuitSnapshot(string Model, string State, bool? LastCallSucceeded);
+
 public sealed class ModelCircuitBreaker(bool halfOpenEnabled, ILogger<ModelCircuitBreaker> logger,
     TimeProvider? timeProvider = null)
 {
@@ -19,10 +21,24 @@ public sealed class ModelCircuitBreaker(bool halfOpenEnabled, ILogger<ModelCircu
         public int Failures;
         public long OpenedAt;
         public long Generation;
+        public bool? LastCallSucceeded;
     }
 
     private readonly ConcurrentDictionary<string, Breaker> breakers = new(StringComparer.Ordinal);
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
+    // Знімок не запускає проб і не змінює стан breaker.
+    public ModelCircuitSnapshot[] GetSnapshots() => breakers.Select(entry =>
+    {
+        lock (entry.Value)
+            return new ModelCircuitSnapshot(entry.Key,
+                entry.Value.Phase switch
+                {
+                    Phase.Open => "open",
+                    Phase.HalfOpen => "half-open",
+                    _ => "closed"
+                }, entry.Value.LastCallSucceeded);
+    }).ToArray();
 
     public async Task<GatewayResult> ExecuteAsync(string model, Func<Task<GatewayResult>> call)
     {
@@ -59,6 +75,7 @@ public sealed class ModelCircuitBreaker(bool halfOpenEnabled, ILogger<ModelCircu
                 // Запізніла відповідь старого запиту не змінює новий цикл breaker.
                 if (generation == breaker.Generation)
                 {
+                    breaker.LastCallSucceeded = result.Ok;
                     if (result.Ok)
                     {
                         breaker.Failures = 0;

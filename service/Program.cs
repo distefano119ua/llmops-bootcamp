@@ -9,11 +9,13 @@ using LlmOps.Endpoints;
 using LlmOps.BudgetPolicy;
 using LlmOps.Tools;
 using LlmOps.Guardrails;
+using LlmOps.Observability;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddInfrastructureLogging(args);
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ModelRouter>();
+builder.Services.AddSingleton<ErrorCounters>();
 var pendingTtlSetting = Environment.GetEnvironmentVariable("pending-ttl") ?? "300";
 if (!int.TryParse(pendingTtlSetting, out var pendingTtlSeconds) || pendingTtlSeconds <= 0)
     throw new InvalidOperationException("pending-ttl must be a positive number of seconds.");
@@ -30,6 +32,9 @@ if (!bool.TryParse(halfOpenSetting, out var halfOpenEnabled))
     throw new InvalidOperationException("circuit-breaker-half-open must be true or false.");
 builder.Services.AddSingleton<ModelCircuitBreaker>(services =>
     new ModelCircuitBreaker(halfOpenEnabled, services.GetRequiredService<ILogger<ModelCircuitBreaker>>()));
+builder.Services.AddSingleton<ProviderStatusService>(services =>
+    new ProviderStatusService(defaultModel, services.GetRequiredService<ModelRouter>(),
+        services.GetRequiredService<ModelCircuitBreaker>()));
 var redisConnection = Environment.GetEnvironmentVariable("REDIS_CONN") ?? "redis:6379";
 var redisCacheTtlSetting = Environment.GetEnvironmentVariable("ttl-redis-cache") ?? "60";
 if (!int.TryParse(redisCacheTtlSetting, out var redisCacheTtlSeconds) || redisCacheTtlSeconds <= 0)
@@ -47,6 +52,9 @@ builder.Services.AddSingleton<PromptRepository>(services =>
         services.GetRequiredService<ILogger<PromptRepository>>()));
 builder.Services.AddSingleton<RequestRepository>(services =>
     new RequestRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>()));
+builder.Services.AddSingleton<ObservabilityRepository>(services =>
+    new ObservabilityRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>()));
+builder.Services.AddSingleton<SloService>();
 builder.Services.AddSingleton<BudgetRepository>(services =>
     new BudgetRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>(),
         services.GetRequiredService<ILogger<BudgetRepository>>()));
@@ -65,6 +73,8 @@ app.UseMiddleware<LoggingMiddleware>();
 app.MapBudgetEndpoints();
 app.MapModelPriceEndpoints();
 app.MapApprovalEndpoints();
+app.MapProviderEndpoints();
+app.MapSloEndpoints();
 
 app.MapPost("/chat", async (
     ChatIn body, 
@@ -77,7 +87,8 @@ app.MapPost("/chat", async (
     BudgetPolicyEvaluator budgetPolicy,
     HttpContext context, 
     ModelCircuitBreaker circuitBreaker,
-    ModelRouter router) =>
+    ModelRouter router,
+    ErrorCounters errorCounters) =>
 {
     var requestId = Guid.Parse(context.TraceIdentifier);
     var startedAt = DateTimeOffset.UtcNow;
@@ -86,6 +97,10 @@ app.MapPost("/chat", async (
     var injectionCategory = PromptInjectionGuard.Detect(body.Message);
     if (injectionCategory is not null)
     {
+        if (injectionCategory == "inspection_timeout")
+            errorCounters.RecordGuardrailInspectionTimeout();
+        else
+            errorCounters.RecordGuardrailRefusal();
         InfrastructureLog.Write(app.Logger, LogLevel.Warning,
             new EventId(1700, "guardrail.blocked"), "Request blocked by guardrail", null,
             ("guardrail_category", injectionCategory));
@@ -149,8 +164,10 @@ app.MapPost("/chat", async (
                     ("fallback_events", transitions));
             }
 
-            return await GatewayClient.CallGateway(http, gateway, model, systemPrompt,
+            var result = await GatewayClient.CallGateway(http, gateway, model, systemPrompt,
                 userMessage, context.RequestAborted);
+            if (result.Status == 429) errorCounters.RecordProvider429();
+            return result;
         });
         if (gatewayResult.Ok || !gatewayResult.CanFallback) break;
     }
@@ -220,7 +237,23 @@ app.MapPost("/chat", async (
 // ці ендпоінти читає готова консоль. поверни потрібну форму — картки оживуть.
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));                                    // ліфнес, не для консолі
 
-app.MapGet("/observability", () => Results.Json(new { todo = "aggregate from requests table" }));  // W5: { p95_ms, requests, cache_hit_pct, error_rate_pct, fallback_events }
+app.MapGet("/observability", async (ObservabilityRepository observability,
+    RedisResponseCache cache, ModelRouter router, ErrorCounters errorCounters) =>
+{
+    var today = await observability.GetTodayMetrics();
+    var hits = cache.Hits;
+    var misses = cache.Misses;
+    var cacheHitPct = hits + misses == 0 ? 0m : Math.Round(100m * hits / (hits + misses), 1);
+    return Results.Json(new
+    {
+        requests = today.Requests,
+        p95_ms = today.P95Ms,
+        error_rate_pct = today.ErrorRatePct,
+        cache_hit_pct = cacheHitPct,
+        fallback_events = router.FallbackEvents,
+        error_counts = errorCounters.GetSnapshot()
+    });
+});
 app.MapGet("/cost", async (RequestRepository requests, BudgetRepository budgets) =>
 {
     var today = await requests.GetTodayCost();
@@ -249,7 +282,6 @@ app.MapPost("/prompts/{version}/activate", async (string version, HttpContext co
 
     return Results.Ok(new { version, active = true });
 });
-app.MapGet("/providers", () => Results.Json(new { todo = "provider health" }));                    // W5: { providers: [ { name, status } ] }
 
 app.Run("http://0.0.0.0:8080");
 
