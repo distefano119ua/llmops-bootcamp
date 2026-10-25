@@ -84,6 +84,9 @@ static (string, object?[]?) Reply(string user, bool promptOk, bool garbage)
         return ("Створюю тікет і ескалюю на оператора.", Tool("create_ticket"));
     if (u.Contains("замовлен") || u.Contains("order") || u.Contains("#"))
         return ("Перевіряю статус вашого замовлення…", Tool("lookup_order"));
+    // Навчальний сценарій: інструмент відсутній у реєстрі service.
+    if (u.Contains("unknown tool"))
+        return ("Перевіряю доставку…", Tool("lookup_delivery"));
 
     // далі — залежить від промпта
     if (!promptOk) return ("не знаю", null);

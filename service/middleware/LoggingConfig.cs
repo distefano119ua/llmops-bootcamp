@@ -13,7 +13,7 @@ public sealed class InfrastructureLoggingOptions
     public string[] ExcludedPaths { get; set; } = [];
     public string[] StateFields { get; set; } = ["dependency", "operation", "duration_ms", "address", "connection_id", "request_id",
         "model", "user", "budget", "completion_tokens_price", "prompt_tokens_price",
-        "today_usd", "threshold_percent", "usage_percent", "requested_model", "selected_model"];
+        "today_usd", "threshold_percent", "usage_percent", "requested_model", "selected_model", "guardrail_category"];
     public Dictionary<string, string> FrameworkMessages { get; set; } = new()
     {
         ["Microsoft.AspNetCore.Server.Kestrel:13"] = "Unhandled application exception"

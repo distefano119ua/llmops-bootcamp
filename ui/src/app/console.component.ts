@@ -59,9 +59,17 @@ import { catchError } from 'rxjs/operators';
     <div class="card">
       <div class="ch">Approvals · HITL <span class="lens">L08</span></div>
       <ng-container *ngIf="approvals?.length; else emptyA">
-        <div class="row" *ngFor="let a of approvals">
-          <span class="mono">{{ a.id }}</span> {{ a.action }}
-          <button class="act ok" (click)="approve(a.id)">approve</button>
+        <div class="approval" *ngFor="let a of approvals; trackBy: approvalId">
+          <div class="approval-info"><span class="mono">{{ a.id }}</span> {{ a.action }}</div>
+          <div class="approval-fields">
+            <label>manager <input #operatorName type="text" autocomplete="username" /></label>
+            <label>Rejection reason <input #rejectionReason type="text" /></label>
+          </div>
+          <div class="approval-actions">
+            <button class="act ok" (click)="approve(a.id)">approve</button>
+            <button class="act" (click)="cancel(a.id, operatorName.value, rejectionReason.value)">reject</button>
+          </div>
+          <span class="error" *ngIf="rejectionErrors[a.id]">{{ rejectionErrors[a.id] }}</span>
         </div>
       </ng-container>
       <ng-template #emptyA><div class="empty">— черга порожня</div></ng-template>
@@ -95,6 +103,16 @@ import { catchError } from 'rxjs/operators';
       .act { margin-left: auto; font-size: 11.5px; border: 1px solid #dfe1e8; background: #fff; border-radius: 7px; padding: 3px 10px; cursor: pointer; color: #565c6b; font-family: inherit; }
       .act:hover { border-color: #4038c4; color: #4038c4; }
       .act.ok:hover { border-color: #177245; color: #177245; }
+      .act + .act { margin-left: 0; }
+      .approval { display: flex; flex-direction: column; gap: 10px; padding: 12px 0; font-size: 13px; }
+      .approval + .approval { border-top: 1px solid #e4e6ec; }
+      .approval-info { overflow-wrap: anywhere; }
+      .approval-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 10px; }
+      .approval label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .approval input { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid #dfe1e8; border-radius: 7px; font: inherit; }
+      .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
+      .approval-actions .act { margin-left: 0; }
+      .error { color: #b3261e; }
       .prov { display: flex; align-items: center; font-size: 13px; padding: 4px 0; }
       .dot { width: 8px; height: 8px; border-radius: 50%; background: #177245; display: inline-block; margin-right: 8px; }
       .dot.down { background: #b3261e; }
@@ -110,6 +128,7 @@ export class ConsoleComponent implements OnInit, OnDestroy {
   prompts: any[] | null = null;
   providers: any[] | null = null;
   approvals: any[] | null = null;
+  rejectionErrors: Record<string, string> = {};
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private http: HttpClient) {}
@@ -136,6 +155,24 @@ export class ConsoleComponent implements OnInit, OnDestroy {
     this.http.post('/api/approvals/' + id + '/approve', {}).subscribe({
       next: () => this.refresh(),
       error: () => this.refresh(),
+    });
+  }
+
+  approvalId(_: number, approval: { id: string }): string { return approval.id; }
+
+  cancel(id: string, user: string, reason: string): void {
+    if (!user.trim() || !reason.trim()) {
+      this.rejectionErrors[id] = 'Вкажіть оператора та причину відхилення.';
+      return;
+    }
+    delete this.rejectionErrors[id];
+    this.http.post('/api/approvals/' + id + '/cancel', { user: user.trim(), reason: reason.trim() }).subscribe({
+      next: () => this.refresh(),
+      error: (error) => {
+        this.rejectionErrors[id] = error.status === 404
+          ? 'Заявку вже опрацьовано.' : 'Не вдалося відхилити заявку. Спробуйте ще раз.';
+        this.refresh();
+      },
     });
   }
 

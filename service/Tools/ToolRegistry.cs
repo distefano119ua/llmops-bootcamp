@@ -2,20 +2,23 @@ using System.Text.Json;
 
 namespace LlmOps.Tools;
 
-public sealed record ToolResult(bool Success, string Content);
+public sealed record ToolResult(bool Success, string Content, Guid? ApprovalId = null);
 
-public sealed class ToolRegistry
+public sealed class ToolRegistry(ApprovalStore approvals)
 {
-    // У core виконуємо лише read-only дії; create_ticket поки повертає відмову.
-    private readonly IReadOnlyDictionary<string, Func<JsonElement, ToolResult>> tools =
-        new Dictionary<string, Func<JsonElement, ToolResult>>(StringComparer.Ordinal)
+    // Read-only виконуємо одразу, create_ticket лише ставимо в чергу підтверджень.
+    private readonly IReadOnlyDictionary<string, Func<JsonElement, Guid, ToolResult>> tools =
+        new Dictionary<string, Func<JsonElement, Guid, ToolResult>>(StringComparer.Ordinal)
         {
-            ["lookup_order"] = LookupOrder,
-            ["create_ticket"] = _ => new ToolResult(false,
-                "Створення тікета потребує підтвердження оператора.")
+            ["lookup_order"] = (arguments, _) => LookupOrder(arguments),
+            ["create_ticket"] = (arguments, requestId) =>
+            {
+                var approval = approvals.EnqueueTicket(requestId, arguments.GetRawText());
+                return new ToolResult(true, "Створення тікета очікує підтвердження оператора.", approval.Id);
+            }
         };
 
-    public ToolResult RunTool(string name, string arguments)
+    public ToolResult RunTool(string name, string arguments, Guid requestId)
     {
         if (!tools.TryGetValue(name, out var handler))
             return new ToolResult(false, "Запитаний інструмент недоступний.");
@@ -26,7 +29,7 @@ public sealed class ToolRegistry
             if (document.RootElement.ValueKind != JsonValueKind.Object)
                 return new ToolResult(false, "Не вдалося виконати інструмент: некоректні аргументи.");
 
-            return handler(document.RootElement);
+            return handler(document.RootElement, requestId);
         }
         catch (JsonException)
         {

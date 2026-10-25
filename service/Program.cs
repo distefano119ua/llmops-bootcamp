@@ -8,11 +8,16 @@ using LlmOps.Routing;
 using LlmOps.Endpoints;
 using LlmOps.BudgetPolicy;
 using LlmOps.Tools;
+using LlmOps.Guardrails;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddInfrastructureLogging(args);
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ModelRouter>();
+var pendingTtlSetting = Environment.GetEnvironmentVariable("pending-ttl") ?? "300";
+if (!int.TryParse(pendingTtlSetting, out var pendingTtlSeconds) || pendingTtlSeconds <= 0)
+    throw new InvalidOperationException("pending-ttl must be a positive number of seconds.");
+builder.Services.AddSingleton<ApprovalStore>(_ => new ApprovalStore(TimeSpan.FromSeconds(pendingTtlSeconds)));
 builder.Services.AddSingleton<ToolRegistry>();
 
 // налаштування беремо з оточення (задаються в docker-compose.yml)
@@ -59,6 +64,7 @@ var app = builder.Build();
 app.UseMiddleware<LoggingMiddleware>();
 app.MapBudgetEndpoints();
 app.MapModelPriceEndpoints();
+app.MapApprovalEndpoints();
 
 app.MapPost("/chat", async (
     ChatIn body, 
@@ -76,11 +82,28 @@ app.MapPost("/chat", async (
     var requestId = Guid.Parse(context.TraceIdentifier);
     var startedAt = DateTimeOffset.UtcNow;
 
-    // guardrails (W4): тут перевірити вхід на PII / інʼєкції. поки нічого.
-    // TODO(student, W4)
+    // Guardrails (W4): відхиляємо прямі ін'єкції до кешу, БД та виклику моделі.
+    var injectionCategory = PromptInjectionGuard.Detect(body.Message);
+    if (injectionCategory is not null)
+    {
+        InfrastructureLog.Write(app.Logger, LogLevel.Warning,
+            new EventId(1700, "guardrail.blocked"), "Request blocked by guardrail", null,
+            ("guardrail_category", injectionCategory));
+        return Results.Json(new
+        {
+            request_id = requestId,
+            content = "Не можу виконати запит на зміну правил або розкриття внутрішніх інструкцій. Сформулюйте, будь ласка, запит щодо підтримки.",
+            tool = (string?)null,
+            latency_ms = (int)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds,
+            blocked = true
+        });
+    }
+
+    // Маскуємо email перед відправленням у модель.
+    var userMessage = PiiMasker.MaskPii(body.Message);
 
     // routing (W2): обираємо модель за задачею.
-    var model = router.Route(body.Message, defaultModel);
+    var model = router.Route(userMessage, defaultModel);
     var decision = await budgetPolicy.EvaluateAsync(model);
     if (decision.Model is null)
         return Results.Json(new { error = "Model prices unavailable", request_id = requestId }, statusCode: 503);
@@ -92,7 +115,7 @@ app.MapPost("/chat", async (
     var systemPrompt = prompt.Body;
 
     // cache (W3): перед викликом глянути в Redis — раптом вже відповідали
-    var cacheKey = RedisResponseCache.CreateKey(model, prompt, body.Message);
+    var cacheKey = RedisResponseCache.CreateKey(model, prompt, userMessage);
     var cached = await cache.GetAsync(cacheKey);
     if (cached is not null)
     {
@@ -127,7 +150,7 @@ app.MapPost("/chat", async (
             }
 
             return await GatewayClient.CallGateway(http, gateway, model, systemPrompt,
-                body.Message, context.RequestAborted);
+                userMessage, context.RequestAborted);
         });
         if (gatewayResult.Ok || !gatewayResult.CanFallback) break;
     }
@@ -155,14 +178,14 @@ app.MapPost("/chat", async (
         var actualPrice = await prices.GetByModel(model);
         pr = actualPrice is null ? null : new BudgetModelPrice(actualPrice.Model,
             actualPrice.PromptTokensPrice, actualPrice.CompletionTokensPrice);
-        cacheKey = RedisResponseCache.CreateKey(model, prompt, body.Message);
+        cacheKey = RedisResponseCache.CreateKey(model, prompt, userMessage);
     }
 
     if (gatewayResult.Ok)
     {
         foreach (var call in pendingToolCalls)
         {
-            var result = toolRegistry.RunTool(call.Name, call.Arguments);
+            var result = toolRegistry.RunTool(call.Name, call.Arguments, requestId);
             if (!result.Success)
             {
                 // Не підміняємо відмову інструмента повідомленням про збій gateway.
@@ -170,7 +193,8 @@ app.MapPost("/chat", async (
                 break;
             }
 
-            answer = $"{answer} ({result.Content})";
+            // Для HITL замінюємо намір моделі повідомленням про очікування, без номера тікета.
+            answer = result.ApprovalId is not null ? result.Content : $"{answer} ({result.Content})";
         }
     }
 
@@ -226,7 +250,6 @@ app.MapPost("/prompts/{version}/activate", async (string version, HttpContext co
     return Results.Ok(new { version, active = true });
 });
 app.MapGet("/providers", () => Results.Json(new { todo = "provider health" }));                    // W5: { providers: [ { name, status } ] }
-app.MapGet("/approvals", () => Results.Json(new { todo = "pending HITL approvals" }));              // W4: { pending: [ { id, action } ] }
 
 app.Run("http://0.0.0.0:8080");
 
