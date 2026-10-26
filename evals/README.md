@@ -111,3 +111,5 @@ python3 evals/run.py --dataset evals/golden.jsonl --threshold 9 \
 
 Протокол і поля usage: https://docs.ollama.com/api/chat
 Структурований verdict: https://docs.ollama.com/capabilities/structured-outputs
+
+Для поточного набору з N = 10 кейсів встановлено `--threshold 9`, оскільки за правилом ДЗ при N ≤ 10 поріг становить N−1 і допускає не більше одного проваленого кейсу.
