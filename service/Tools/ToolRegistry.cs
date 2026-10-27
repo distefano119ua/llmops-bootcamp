@@ -1,10 +1,12 @@
 using System.Text.Json;
+using LlmOps.Observability;
+using LlmOps.Middleware;
 
 namespace LlmOps.Tools;
 
 public sealed record ToolResult(bool Success, string Content, Guid? ApprovalId = null);
 
-public sealed class ToolRegistry(ApprovalStore approvals)
+public sealed class ToolRegistry(ApprovalStore approvals, ErrorCounters errorCounters, ILogger<ToolRegistry> logger)
 {
     // Read-only виконуємо одразу, create_ticket лише ставимо в чергу підтверджень.
     private readonly IReadOnlyDictionary<string, Func<JsonElement, Guid, ToolResult>> tools =
@@ -34,6 +36,14 @@ public sealed class ToolRegistry(ApprovalStore approvals)
         catch (JsonException)
         {
             return new ToolResult(false, "Не вдалося виконати інструмент: некоректні аргументи.");
+        }
+        catch (TimeoutException)
+        {
+            errorCounters.RecordToolTimeout();
+            InfrastructureLog.Write(logger, LogLevel.Warning,
+                new EventId(1800, "tool.timeout"), "Tool execution timed out", null,
+                ("tool_name", name), ("error_type", "tool_timeout"));
+            return new ToolResult(false, "Інструмент не відповів вчасно. Спробуйте пізніше.");
         }
     }
 

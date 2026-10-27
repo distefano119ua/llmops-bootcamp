@@ -3,6 +3,9 @@ import json
 import os
 import sys
 import urllib.request
+from decimal import Decimal, InvalidOperation
+
+from ollama_judge import OllamaJudge
 
 BASE = os.environ.get("SERVICE_URL", "http://localhost:8080")
 
@@ -36,13 +39,13 @@ def grade(case, answer):
     for kw in case.get("forbid", []):
         if kw.lower() in a:
             return False
-    # TODO(student): model-based grader (LLM-as-judge) — потребує реального ключа.
     return True
 
 
-def run(path, threshold):
+def run(path, threshold, judge=None):
     cases = [json.loads(x) for x in open(path, encoding="utf-8") if x.strip()]
     passed = 0
+    judge_errors = 0
     for c in cases:
         try:
             ans = call(c["input"])
@@ -50,15 +53,54 @@ def run(path, threshold):
             print(f"  {c['id']}: ERROR {e}")
             continue
         ok = grade(c, ans)
+        if judge is not None:
+            try:
+                judge_ok, reason = judge.grade(c, ans)
+                print(f"  {c['id']}: judge={'ok' if judge_ok else 'FAIL'}, rules={'ok' if ok else 'FAIL'} — {reason[:300]!r}")
+                ok = ok and judge_ok
+            except Exception as e:  # noqa: BLE001
+                print(f"  {c['id']}: JUDGE ERROR {e}")
+                judge_errors += 1
+                ok = False
         passed += int(ok)
         print(f"  {c['id']}: {'ok' if ok else 'FAIL'} — {ans[:60]!r}")
     print(f"eval: {passed}/{len(cases)} passed, threshold {threshold}")
-    return 0 if passed >= threshold else 1
+    if judge is not None:
+        print("judge_usage: " + json.dumps(judge.summary(), ensure_ascii=False))
+        print(f"judge_errors: {judge_errors}")
+    return 0 if passed >= threshold and judge_errors == 0 else 1
+
+
+def nonnegative_price(value):
+    try:
+        price = Decimal(value)
+    except InvalidOperation:
+        raise argparse.ArgumentTypeError("Price must be a non-negative finite number")
+    if not price.is_finite() or price < 0:
+        raise argparse.ArgumentTypeError("Price must be a non-negative finite number")
+    return price
+
+
+def positive_timeout(value):
+    try:
+        timeout = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("Timeout must be a positive finite number")
+    if not 0 < timeout < float("inf"):
+        raise argparse.ArgumentTypeError("Timeout must be a positive finite number")
+    return timeout
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", required=True)
     p.add_argument("--threshold", type=int, required=True)
+    p.add_argument("--judge-model", help="Enable Ollama judge, e.g. nimble:latest")
+    p.add_argument("--ollama-url", default=os.environ.get("OLLAMA_URL", "http://localhost:11434"))
+    p.add_argument("--judge-timeout", type=positive_timeout, default=120)
+    p.add_argument("--judge-input-price-per-1k", type=nonnegative_price, default=Decimal("0"))
+    p.add_argument("--judge-output-price-per-1k", type=nonnegative_price, default=Decimal("0"))
     args = p.parse_args()
-    sys.exit(run(args.dataset, args.threshold))
+    judge = OllamaJudge(args.ollama_url, args.judge_model, args.judge_timeout,
+                        args.judge_input_price_per_1k, args.judge_output_price_per_1k) if args.judge_model else None
+    sys.exit(run(args.dataset, args.threshold, judge))
