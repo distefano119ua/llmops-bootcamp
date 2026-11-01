@@ -30,3 +30,9 @@ docker compose up --build
 із кешем, `make up` — основний стек без Redis. Для додавання Redis до запущеного
 стеку — `make redis`; напряму через Compose — `docker compose --profile advanced up`.
 Для оцінки якості (model-based evals): `cp gateway/.env.example gateway/.env` і заповнити ключі.
+
+## Інцидент-демо (HW6)
+
+[INCIDENT_RUNBOOK.md](INCIDENT_RUNBOOK.md) — команди для відтворення
+сценарію «інцидент → fallback → відновлення», перевірки метрик та збору логів
+в окремому демо-проєкті зі зсунутими портами.
