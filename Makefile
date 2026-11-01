@@ -5,7 +5,7 @@ SERVICE ?=
 TAIL ?= 100
 
 .DEFAULT_GOAL := help
-.PHONY: help up up-redis down stop restart build pull ps logs service redis redis-stop redis-ping db-shell config
+.PHONY: help up up-redis monitoring down stop restart build pull ps logs service redis redis-stop redis-ping db-shell config
 
 help: ## Показати доступні команди
 	@awk 'BEGIN { FS = ":.*## " } /^[a-zA-Z0-9_-]+:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -16,7 +16,10 @@ up: ## Зібрати та запустити основний стек
 	$(COMPOSE) up -d --build
 
 up-redis: ## Зібрати та запустити стек разом із Redis
-	$(COMPOSE_ALL) up -d --build
+	$(COMPOSE_ALL) up -d --build ui redis
+
+monitoring: ## Додати Prometheus і Grafana, зібрати service із /metrics
+	$(COMPOSE_ALL) up -d --build prometheus grafana
 
 down: ## Зупинити та видалити контейнери й мережу, зберігши томи
 	$(COMPOSE_ALL) down

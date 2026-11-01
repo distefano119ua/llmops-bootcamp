@@ -66,5 +66,36 @@ services:
     profiles: ["advanced"]
     ports: ["6379:6379"]
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    logging: *default-logging
+    profiles: ["advanced"]
+    ports: ["127.0.0.1:9090:9090"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on: [service]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    logging: *default-logging
+    profiles: ["advanced"]
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-llmops-local}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus]
+
 volumes:
   pgdata:
+  prometheus-data:
+  grafana-data:

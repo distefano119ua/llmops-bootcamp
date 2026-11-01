@@ -3,7 +3,7 @@ using Npgsql;
 
 namespace LlmOps.Observability;
 
-public sealed record TodayMetrics(long Requests, decimal P95Ms, decimal ErrorRatePct);
+public sealed record TodayMetrics(long Requests, decimal P95Ms, decimal ErrorRatePct, decimal CostUsd);
 public sealed record WeeklyRequestCounts(long Requests, long Successful);
 
 public sealed class ObservabilityRepository(string connectionString, PostgresOperationLogger operations)
@@ -23,10 +23,10 @@ public sealed class ObservabilityRepository(string connectionString, PostgresOpe
         return new WeeklyRequestCounts(reader.GetInt64(0), reader.GetInt64(1));
     });
 
-    public Task<TodayMetrics> GetTodayMetrics() => operations.Run("select", async () =>
+    public Task<TodayMetrics> GetTodayMetrics(CancellationToken cancellationToken = default) => operations.Run("select", async () =>
     {
         await using var db = new NpgsqlConnection(connectionString);
-        await db.OpenAsync();
+        await db.OpenAsync(cancellationToken);
         await using var command = new NpgsqlCommand("""
             SELECT
                 count(*) AS requests,
@@ -35,12 +35,13 @@ public sealed class ObservabilityRepository(string connectionString, PostgresOpe
                     1), 0) AS p95_ms,
                 coalesce(round(
                     avg(CASE WHEN status <> '200' THEN 1.0 ELSE 0 END) * 100,
-                    1), 0) AS error_rate_pct
+                    1), 0) AS error_rate_pct,
+                coalesce(sum(cost_usd), 0) AS cost_usd
             FROM requests
             WHERE created_at::date = CURRENT_DATE
             """, db);
-        await using var reader = await command.ExecuteReaderAsync();
-        await reader.ReadAsync();
-        return new TodayMetrics(reader.GetInt64(0), reader.GetDecimal(1), reader.GetDecimal(2));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return new TodayMetrics(reader.GetInt64(0), reader.GetDecimal(1), reader.GetDecimal(2), reader.GetDecimal(3));
     });
 }
