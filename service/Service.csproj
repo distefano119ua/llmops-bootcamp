@@ -7,6 +7,7 @@
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="8.0.3" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.31" />
+    <PackageReference Include="prometheus-net.AspNetCore" Version="8.2.1" />
     <Content Update="middleware/logging_config.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

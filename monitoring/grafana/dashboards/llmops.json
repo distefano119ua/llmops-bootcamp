@@ -1,0 +1,636 @@
+{
+  "uid": "llmops-overview",
+  "title": "LLMOps Overview",
+  "tags": [
+    "llmops"
+  ],
+  "schemaVersion": 40,
+  "version": 1,
+  "editable": false,
+  "timezone": "browser",
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Service scrape up",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "description": "Prometheus can scrape /metrics; this alone does not imply database availability.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"llmops-service\"}",
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Database metrics available",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "description": "0 means the SQL snapshot failed; database panels are NaN, not healthy zeros.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llmops_database_metrics_available{job=\"llmops-service\"}",
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Requests today (DB)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llmops_requests_today{job=\"llmops-service\"}",
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 4,
+      "title": "p95 today (DB)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llmops_latency_p95_today_seconds{job=\"llmops-service\"}",
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Error rate today (DB)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 6,
+        "h": 5
+      },
+      "description": "Saved non-200 statuses, including model failures returned to the client as HTTP 200.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * llmops_error_ratio_today{job=\"llmops-service\"}",
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Known cost today (DB)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 5,
+        "w": 6,
+        "h": 5
+      },
+      "description": "Sum of known costs; missing prices/usage are not estimated.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llmops_cost_today_usd{job=\"llmops-service\"}",
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Cache hit since start",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 6,
+        "h": 5
+      },
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum(llmops_cache_lookups_total{job=\"llmops-service\",result=\"hit\"}) / clamp_min(sum(llmops_cache_lookups_total{job=\"llmops-service\"}), 1)",
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 8,
+      "title": "Fallback events since start",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 5,
+        "w": 6,
+        "h": 5
+      },
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llmops_fallback_events_total{job=\"llmops-service\"}",
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 9,
+      "title": "Fallback transitions / second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Counter resets on service restart; rate handles observed resets.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(llmops_fallback_events_total{job=\"llmops-service\"}[$__rate_interval]))",
+          "legendFormat": "fallback",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Error events / second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 12,
+        "h": 8
+      },
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(llmops_error_events_total{job=\"llmops-service\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Cache lookups / second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(llmops_cache_lookups_total{job=\"llmops-service\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Database error rate today",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Cumulative within the database day; this is not a rolling-window error rate.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * llmops_error_ratio_today{job=\"llmops-service\"}",
+          "legendFormat": "{{instance}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Provider route state",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Observed breaker state, not active health checks.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model) (llmops_provider_status{job=\"llmops-service\",status=\"ok\"}) + 2 * sum by (model) (llmops_provider_status{job=\"llmops-service\",status=\"degraded\"}) + 3 * sum by (model) (llmops_provider_status{job=\"llmops-service\",status=\"down\"})",
+          "legendFormat": "{{model}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "unknown",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "ok",
+                  "color": "green"
+                },
+                "2": {
+                  "text": "degraded",
+                  "color": "orange"
+                },
+                "3": {
+                  "text": "down",
+                  "color": "red"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 14,
+      "title": "Error event totals since start",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "llmops-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llmops_error_events_total{job=\"llmops-service\"}",
+          "legendFormat": "{{reason}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    }
+  ]
+}
