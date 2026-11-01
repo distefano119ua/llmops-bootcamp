@@ -25,8 +25,7 @@ CREATE TABLE IF NOT EXISTS prompts (
 
 INSERT INTO prompts (name, version, body, active) VALUES
   ('support', 'v1', 'You are an assistant.', false),
-  ('support', 'v2', 'You are a support assistant. Be concise and helpful.', false),
-  ('support', 'v3', 'You are a poetry bot. Reply only in rhymes.', true);
+  ('support', 'v2', 'You are a support assistant. Be concise and helpful.', true);
 
 CREATE TABLE IF NOT EXISTS prompt_activations (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -38,7 +37,7 @@ CREATE TABLE IF NOT EXISTS prompt_activations (
 );
 
 INSERT INTO prompt_activations (prompt_name, version, actor)
-VALUES ('support', 'v3', 'system-seed');
+VALUES ('support', 'v2', 'system-seed');
 
 CREATE INDEX IF NOT EXISTS idx_requests_created_at ON requests (created_at);
 CREATE INDEX IF NOT EXISTS idx_requests_model ON requests (model);
