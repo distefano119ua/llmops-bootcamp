@@ -55,6 +55,7 @@ builder.Services.AddSingleton<RequestRepository>(services =>
 builder.Services.AddSingleton<ObservabilityRepository>(services =>
     new ObservabilityRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>()));
 builder.Services.AddSingleton<SloService>();
+builder.Services.AddSingleton<ServiceMetrics>();
 builder.Services.AddSingleton<BudgetRepository>(services =>
     new BudgetRepository(dbConn, services.GetRequiredService<PostgresOperationLogger>(),
         services.GetRequiredService<ILogger<BudgetRepository>>()));
@@ -75,6 +76,7 @@ app.MapModelPriceEndpoints();
 app.MapApprovalEndpoints();
 app.MapProviderEndpoints();
 app.MapSloEndpoints();
+app.MapServiceMetrics();
 
 app.MapPost("/chat", async (
     ChatIn body, 

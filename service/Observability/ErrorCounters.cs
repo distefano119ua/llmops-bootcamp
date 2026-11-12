@@ -12,11 +12,11 @@ public sealed class ErrorCounters
     public void RecordGuardrailRefusal() => Interlocked.Increment(ref guardrailRefusal);
     public void RecordGuardrailInspectionTimeout() => Interlocked.Increment(ref guardrailInspectionTimeout);
 
-    public object GetSnapshot() => new
+    public IReadOnlyDictionary<string, long> GetSnapshot() => new Dictionary<string, long>
     {
-        provider_429 = Interlocked.Read(ref provider429),
-        tool_timeout = Interlocked.Read(ref toolTimeout),
-        guardrail_refusal = Interlocked.Read(ref guardrailRefusal),
-        guardrail_inspection_timeout = Interlocked.Read(ref guardrailInspectionTimeout)
+        ["provider_429"] = Interlocked.Read(ref provider429),
+        ["tool_timeout"] = Interlocked.Read(ref toolTimeout),
+        ["guardrail_refusal"] = Interlocked.Read(ref guardrailRefusal),
+        ["guardrail_inspection_timeout"] = Interlocked.Read(ref guardrailInspectionTimeout)
     };
 }
